@@ -6,7 +6,7 @@ let gruposEncontrados = [];
 const TIPOS = {
   post: "Post", postFoto: "Post+foto", comentario: "Comentário",
   comentarioFoto: "Coment+foto", like: "Like", entrar: "Entrar",
-  busca: "Busca", feed: "Feed",
+  busca: "Busca", feed: "Feed", membros: "Membros", amigo: "Amizade",
 };
 
 function registrar(msg, cls = "l-info") {
@@ -56,7 +56,7 @@ const resolver = async (bruto) => {
 function controle(estado) {
   rodando = estado;
   parar = false;
-  for (const b of ["btnPostar", "btnEngajar", "btnEntrar"])
+  for (const b of ["btnPostar", "btnEngajar", "btnEntrar", "btnAmizade", "btnAquecer"])
     $(b).disabled = estado;
   $("btnParar").style.display = estado ? "block" : "none";
   if (!estado) $("progresso").textContent = "";
@@ -174,7 +174,7 @@ async function entrar() {
       if (parar) { registrar("Interrompido", "l-warn"); break; }
       const g = lista[i];
       $("progresso").textContent = `Entrando ${i + 1}/${lista.length} — ${g.nome}`;
-      const res = await comando("entrar", { idGrupo: g.id });
+      const res = await comando("entrar", { idGrupo: g.id, responderPerguntas: $("joinPerguntas").checked });
       if (res.resultado === "entrou") registrar(`${g.nome}: entrou`, "l-ok");
       else if (res.resultado === "pendente") registrar(`${g.nome}: pedido pendente`, "l-warn");
       else if (res.resultado === "ja_membro") registrar(`${g.nome}: já é membro`, "l-info");
@@ -262,11 +262,99 @@ async function engajar() {
   }
 }
 
+// ---------- amizade ----------
+async function amizade() {
+  const perfis = $("perfis").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const dmin = Math.max(10, +$("amDelayMin").value || 45);
+  const dmax = Math.max(dmin, +$("amDelayMax").value || 120);
+  if (!perfis.length) return registrar("Lista de perfis vazia", "l-err");
+  controle(true);
+  try {
+    for (let i = 0; i < perfis.length; i++) {
+      if (parar) { registrar("Interrompido", "l-warn"); break; }
+      const p = perfis[i];
+      $("progresso").textContent = `Perfil ${i + 1}/${perfis.length}`;
+      try {
+        const r = await comando("perfil", { bruto: p });
+        if (r.erro) throw new Error(r.erro);
+        const res = await comando("amizade", { idUsuario: r.idUsuario });
+        if (res.resultado === "enviado") registrar(`${p}: pedido enviado`, "l-ok");
+        else if (res.resultado === "ja_amigo") registrar(`${p}: já é amigo/pendente`, "l-info");
+        else if (res.resultado === "bloqueado") {
+          registrar(`${p}: BLOQUEIO — ${res.erro}. Parando.`, "l-err");
+          break;
+        } else registrar(`${p}: ${res.erro || "falhou"}`, "l-warn");
+      } catch (e) {
+        registrar(`${p}: ${e.message}`, "l-warn");
+      }
+      if (i < perfis.length - 1 && !parar)
+        await dormir(aleatorio(dmin, dmax) * 1000);
+    }
+  } catch (e) {
+    registrar(e.message, "l-err");
+  } finally {
+    controle(false);
+    registrar("Fim da fila de amizade", "l-info");
+  }
+}
+
+// ---------- aquecer ----------
+async function aquecer() {
+  const grupo = $("warmGrupo").value.trim();
+  const limite = Math.max(1, +$("warmLimite").value || 10);
+  const delay = Math.max(15, +$("warmDelay").value || 60);
+  if (!grupo) return registrar("Informe o grupo", "l-err");
+  controle(true);
+  try {
+    const gid = await resolver(grupo);
+    registrar(`Aquecendo com membros do grupo ${gid} (limite ${limite})`);
+    let enviados = 0, cursor, paginas = 0, jaAmigos = 0;
+    outer: while (enviados < limite && paginas < 20) {
+      if (parar) { registrar("Interrompido", "l-warn"); break; }
+      paginas++;
+      const res = await comando("membros", { idGrupo: gid, cursor });
+      if (res.resultado === "bloqueado") {
+        registrar(`BLOQUEIO — ${res.erro}`, "l-err");
+        break;
+      }
+      if (res.resultado !== "ok") { registrar(res.erro || "membros falhou", "l-err"); break; }
+      if (!res.usuarios.length) { registrar("Lista de membros vazia", "l-warn"); break; }
+      cursor = res.cursor;
+      for (const u of res.usuarios) {
+        if (parar) break outer;
+        if (enviados >= limite) break outer;
+        if (u.status && u.status !== "CAN_REQUEST") { jaAmigos++; continue; }
+        $("progresso").textContent = `Pedidos ${enviados}/${limite} — ${u.nome || u.id}`;
+        const r = await comando("amizade", { idUsuario: u.id });
+        if (r.resultado === "enviado") {
+          enviados++;
+          registrar(`pedido → ${u.nome || u.id}`, "l-ok");
+        } else if (r.resultado === "ja_amigo") {
+          jaAmigos++;
+          registrar(`${u.nome || u.id}: já é amigo`, "l-info");
+        } else if (r.resultado === "bloqueado") {
+          registrar(`BLOQUEIO — ${r.erro}. Parando.`, "l-err");
+          break outer;
+        } else registrar(`${u.nome || u.id}: ${r.erro || "falhou"}`, "l-warn");
+        await dormir(delay * 1000);
+      }
+      if (!cursor) break;
+    }
+    registrar(`Aquecer concluído: ${enviados} pedidos (${jaAmigos} já amigos)`, "l-ok");
+  } catch (e) {
+    registrar(e.message, "l-err");
+  } finally {
+    controle(false);
+  }
+}
+
 // ---------- listeners ----------
 $("btnPostar").addEventListener("click", () => { if (!rodando) postar(); });
 $("btnBuscar").addEventListener("click", () => { if (!rodando) buscar(); });
 $("btnEntrar").addEventListener("click", () => { if (!rodando) entrar(); });
 $("btnEngajar").addEventListener("click", () => { if (!rodando) engajar(); });
+$("btnAmizade").addEventListener("click", () => { if (!rodando) amizade(); });
+$("btnAquecer").addEventListener("click", () => { if (!rodando) aquecer(); });
 $("btnParar").addEventListener("click", () => { parar = true; });
 $("btnAddLista").addEventListener("click", () => {
   const lista = selecionados();

@@ -71,15 +71,17 @@ Estas técnicas já estão implementadas no nosso `inject.js`:
 
 `extension/` — motor completo portado (v2):
 
-- `inject.js` (~840 linhas): sniffer multi-tipo + engine de replay.
+- `inject.js`: sniffer multi-tipo + engine de replay.
   Calibrações: `post`, `postFoto`, `comentario`, `comentarioFoto`,
-  `like`, `entrar`, `busca`, `feed`, `amigo`.
+  `like`, `entrar`, `busca`, `feed`, `membros`, `amigo`.
   Ações via ponte: `postar`, `resolver`, `curtir`, `comentar`,
-  `entrar`, `buscar`, `feed`, `ping`.
+  `entrar`, `buscar`, `feed`, `membros`, `amizade`, `perfil`, `ping`.
+  Join suporta `responderPerguntas` (preenche campos answer/text com "ok").
 - `content.js`: ponte + persiste `calibracoes` por tipo no storage.
-- `sidepanel.*`: 3 módulos UI — Postar (com foto), Buscar+Entrar
-  (resultados clicáveis → lista), Engajar (feed→like+comentário com
-  spintax `{a|b}`).
+- `sidepanel.*`: 4 módulos UI — Postar (com foto), Buscar+Entrar
+  (resultados clicáveis + auto-resposta a perguntas), Engajar
+  (feed→like+comentário com spintax `{a|b}`), Amizade/Aquecer
+  (pedidos por lista de perfis ou membros de grupo, filtra CAN_REQUEST).
 
 **Pendente de validação real**: heurísticas de extração de `variables`
 podem precisar ajuste fino (estruturas variam entre mutations do FB).
@@ -92,9 +94,9 @@ podem precisar ajuste fino (estruturas variam entre mutations do FB).
 3. [x] Comentários em massa (módulo Engajar: feed→comentar)
 4. [x] Curtidas/reações automáticas (módulo Engajar: feed→curtir)
 5. [x] Busca de grupos por palavra-chave + pedido de entrada (UI pronta)
-6. [ ] Responder perguntas de grupo automaticamente ("ok" em todos campos)
-7. [ ] Pedidos de amizade em massa (calibração `amigo` já captura)
-8. [ ] Aquecedor de perfil (navegação simulada)
+6. [x] Responder perguntas de grupo automaticamente ("ok" em todos campos)
+7. [x] Pedidos de amizade em massa (lista de perfis + membros de grupo)
+8. [x] Aquecedor de perfil (= pedidos de amizade a membros, como o Pulso)
 9. [ ] Multi-conta (perfis Chrome separados; depois proxies)
 10. [ ] SaaS: backend de licença/assinatura (modelo do Pulso como referência)
 

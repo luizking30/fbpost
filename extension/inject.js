@@ -20,7 +20,12 @@
     busca: /Search.*Results?|SearchCometResults|Groups?.*Search|GroupsCometSearch/i,
     typeahead: /Typeahead|Suggestion|Recent|Entity|Keyword/i,
     amigo: /FriendingComet.*(AddFriend|Send)|AddFriend|FriendRequest.*Send|SendFriendRequest/i,
+    membros: /Group.*Member|Member.*(List|Pagination)|GroupsCometMembers|things_in_common/i,
+    memberQ: /Members(Admins|Experts|Contributors|NearYou)?/i,
   };
+
+  const RE_JA_AMIGO = /already_friends|already sent|j[áa] (enviou|s[ãa]o amigos)|friend_request_already|ARE_FRIENDS|"text":"Amigos"/i;
+  const RE_ENVIADO = /request_sent|outgoing|pending|aguardando|enviada|CONFIRM|can_cancel_friend_request/i;
 
   const RE_BLOQUEIO_TEXTO =
     /you're temporarily blocked|voc[êe] est[áa] temporariamente|limitamos a frequ[êe]ncia|est[áa] bloqueado temporariamente|try again later|tente novamente mais tarde/i;
@@ -213,6 +218,22 @@
         const r = acharQuery(v);
         if (r) return r;
       }
+    return "";
+  };
+
+  const acharIdAmigo = (obj) => {
+    if (!obj || typeof obj !== "object") return "";
+    for (const [k, v] of Object.entries(obj)) {
+      if (/^(friend_requestee_ids?|requestee_id|friending_channel_requestee|friend_request_ids?|user_id|profile_id|target_id|friendRequesteeID)$/i.test(k)) {
+        if (Array.isArray(v) && v.length && /^\d{5,}$/.test(String(v[0])))
+          return String(v[0]);
+        if (/^\d{5,}$/.test(String(v))) return String(v);
+      }
+      if (v && typeof v === "object") {
+        const r = acharIdAmigo(v);
+        if (r) return r;
+      }
+    }
     return "";
   };
 
@@ -496,7 +517,14 @@
 
       // pedido de amizade
       if (RE.amigo.test(nome)) {
-        registrarCaptura("amigo", base);
+        registrarCaptura("amigo", { ...base, sampleUserId: acharIdAmigo(vars) });
+        return;
+      }
+
+      // lista de membros de grupo
+      if (RE.membros.test(nome)) {
+        const gid = acharIdGrupo(vars);
+        if (gid) registrarCaptura("membros", { ...base, sampleGroupId: gid });
         return;
       }
     } catch {}
@@ -670,16 +698,33 @@
     }
   }
 
-  async function entrarNoGrupo({ idGrupo }) {
+  const preencherRespostas = (vars) => {
+    if (Array.isArray(vars)) return vars.map(preencherRespostas);
+    if (vars && typeof vars === "object") {
+      const r = {};
+      for (const [k, v] of Object.entries(vars))
+        r[k] =
+          /^(answer|answer_text|response|text)$/i.test(k) && typeof v === "string"
+            ? "ok"
+            : preencherRespostas(v);
+      return r;
+    }
+    return vars;
+  };
+
+  async function entrarNoGrupo({ idGrupo, responderPerguntas }) {
     const cal = window.__SP_CAPTURAS.entrar;
     if (!cal) return { resultado: "erro", erro: "sem calibração de entrar — entre num grupo manualmente" };
     const postando = window.__fbPostando;
     window.__fbPostando = true;
     try {
+      const variaveisBase = responderPerguntas
+        ? preencherRespostas(JSON.parse(JSON.stringify(cal.variaveis)))
+        : undefined;
       const trocas = cal.sampleGroupId
         ? [{ de: cal.sampleGroupId, para: idGrupo, embutido: true }]
         : [];
-      const corpo = montarRequisicao(cal, { trocas });
+      const corpo = montarRequisicao(cal, { trocas, variaveisBase });
       const { status, texto: bruto } = await executarGraphql(corpo);
       const cls = classificarResposta(status, bruto);
       if (cls.resultado === "bloqueado" || cls.resultado === "erro")
@@ -815,6 +860,104 @@
     }
   }
 
+  // ---------- perfil / membros / amizade ----------
+  async function resolverPerfil(bruto) {
+    bruto = String(bruto || "").trim();
+    const mId = bruto.match(/profile\.php\?id=(\d+)/) || bruto.match(/^\d{5,}$/);
+    if (mId) return { idUsuario: mId[1] || mId[0] };
+    const slug = (bruto.match(/facebook\.com\/([^\/?\s&#]+)/) || [])[1] || bruto;
+    const res = await fetch(`https://www.facebook.com/${encodeURIComponent(slug)}`,
+      { credentials: "same-origin" });
+    const html = await res.text();
+    const id = pegarPrimeiro(
+      html,
+      /"userID":"?(\d{5,})/,
+      /"user_id":"?(\d{5,})/,
+      /"entity_id":"?(\d{5,})"[^}]{0,120}"entity_type":"?(?:USER|PROFILE)/i,
+      /profile\.php\?id=(\d+)/
+    );
+    if (!id) throw new Error(`não achei o ID do perfil: ${slug}`);
+    return { idUsuario: id };
+  }
+
+  const extrairUsuarios = (objs, mapa) => {
+    let cursor;
+    const visitar = (o, prof = 0) => {
+      if (!o || typeof o !== "object" || prof > 25) return;
+      const pi = o.page_info;
+      if (pi?.end_cursor && pi.has_next_page && !cursor) cursor = pi.end_cursor;
+      const ehUsuario = o.__typename === "User" || o.__isActor === "User";
+      const id = o.id;
+      if (ehUsuario && id && /^\d{5,}$/.test(String(id))) {
+        let status = o.friendship_status ?? o.friendshipStatus;
+        if (!status) {
+          const titulo = o.profile_action?.title?.text ?? "";
+          if (/cancelar pedido/i.test(titulo)) status = "OUTGOING_REQUEST";
+          else if (/^amigos$/i.test(titulo)) status = "ARE_FRIENDS";
+          else if (/adicionar|add friend/i.test(titulo)) status = "CAN_REQUEST";
+        }
+        const nome = o.name ?? o.title?.text;
+        mapa.set(String(id), { id: String(id), nome, status });
+      }
+      for (const v of Object.values(o)) if (v && typeof v === "object") visitar(v, prof + 1);
+    };
+    objs.forEach(visitar);
+    return cursor;
+  };
+
+  async function membrosDoGrupo({ idGrupo, cursor }) {
+    const cal = window.__SP_CAPTURAS.membros;
+    if (!cal) return { resultado: "erro", erro: "sem calibração de membros — abra a aba Membros de um grupo" };
+    const postando = window.__fbPostando;
+    window.__fbPostando = true;
+    try {
+      const trocas = cal.sampleGroupId
+        ? [{ de: cal.sampleGroupId, para: idGrupo, embutido: true }]
+        : [];
+      const corpo = montarRequisicao(cal, { trocas, cursor: cursor ?? null });
+      const { status, texto: bruto } = await executarGraphql(corpo);
+      const cls = classificarResposta(status, bruto);
+      if (cls.resultado === "bloqueado") return cls;
+      const mapa = new Map();
+      const proximo = extrairUsuarios(linhasJson(bruto), mapa);
+      return { resultado: "ok", usuarios: [...mapa.values()], cursor: proximo };
+    } catch (e) {
+      return { resultado: "erro", erro: e.message };
+    } finally {
+      window.__fbPostando = postando;
+    }
+  }
+
+  async function pedirAmizade({ idUsuario }) {
+    const cal = window.__SP_CAPTURAS.amigo;
+    if (!cal) return { resultado: "erro", erro: "sem calibração de amizade — envie um pedido manualmente" };
+    const postando = window.__fbPostando;
+    window.__fbPostando = true;
+    try {
+      const trocas = cal.sampleUserId
+        ? [{ de: cal.sampleUserId, para: idUsuario, embutido: true }]
+        : [];
+      const corpo = montarRequisicao(cal, { trocas });
+      const { status, texto: bruto } = await executarGraphql(corpo);
+      const cls = classificarResposta(status, bruto);
+      if (cls.resultado === "bloqueado") return { resultado: "bloqueado", erro: cls.erro };
+
+      const statusAmizade = pegarPrimeiro(bruto, /"friendship_status"\s*:\s*"([^"]+)"/);
+      if (/ARE_FRIENDS|FRIENDS|INCOMING_REQUEST/.test(statusAmizade || "") || RE_JA_AMIGO.test(bruto))
+        return { resultado: "ja_amigo" };
+      if ("CAN_REQUEST" === statusAmizade)
+        return { resultado: "falhou", erro: "pedido não registrado" };
+      if ("OUTGOING_REQUEST" === statusAmizade || RE_ENVIADO.test(bruto))
+        return { resultado: "enviado" };
+      if (cls.resultado === "erro") return { resultado: "falhou", erro: cls.erro };
+      return { resultado: "enviado" };
+    } catch (e) {
+      return { resultado: "falhou", erro: e.message };
+    } finally {
+      window.__fbPostando = postando;
+    }
+  }
+
   // ---------- ponte de mensagens ----------
   window.addEventListener("message", (ev) => {
     const d = ev.data;
@@ -830,6 +973,9 @@
         else if (acao === "entrar") resultado = await entrarNoGrupo(dados);
         else if (acao === "buscar") resultado = await buscarGrupos(dados);
         else if (acao === "feed") resultado = await feedDoGrupo(dados);
+        else if (acao === "membros") resultado = await membrosDoGrupo(dados);
+        else if (acao === "amizade") resultado = await pedirAmizade(dados);
+        else if (acao === "perfil") resultado = await resolverPerfil(dados.bruto);
         else if (acao === "ping")
           resultado = { ok: true, calibracoes: Object.keys(window.__SP_CAPTURAS) };
         else resultado = { resultado: "erro", erro: "ação desconhecida" };

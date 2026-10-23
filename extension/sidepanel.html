@@ -88,10 +88,33 @@
     <input type="text" id="termo" placeholder="ex: marmita fit">
     <button class="sec" id="btnBuscar">Buscar grupos</button>
     <div id="resultados" style="margin-top:8px"></div>
+    <div class="check"><input type="checkbox" id="joinPerguntas"><span>Responder perguntas do grupo automaticamente</span></div>
     <div class="row">
       <button class="sec" id="btnAddLista">Selecionados → lista</button>
       <button id="btnEntrar">Entrar nos selecionados</button>
     </div>
+  </section>
+</details>
+
+<details>
+  <summary>Pedidos de amizade &amp; aquecer perfil</summary>
+  <section>
+    <label>Perfis (URL/slug — um por linha)</label>
+    <textarea id="perfis" rows="3" placeholder="https://www.facebook.com/usuario.exemplo&#10;profile.php?id=123456"></textarea>
+    <div class="row">
+      <div><label>Delay mín (s)</label><input id="amDelayMin" type="number" value="45" min="10"></div>
+      <div><label>Delay máx (s)</label><input id="amDelayMax" type="number" value="120" min="10"></div>
+    </div>
+    <button id="btnAmizade">Enviar pedidos</button>
+
+    <div style="border-top:1px solid #262c3a; margin:12px 0"></div>
+    <label>Aquecer: mandar pedidos aos membros de um grupo</label>
+    <input type="text" id="warmGrupo" placeholder="https://www.facebook.com/groups/123456">
+    <div class="row">
+      <div><label>Limite de pedidos</label><input id="warmLimite" type="number" value="10" min="1" max="100"></div>
+      <div><label>Delay (s)</label><input id="warmDelay" type="number" value="60" min="15"></div>
+    </div>
+    <button class="sec" id="btnAquecer">Aquecer perfil</button>
   </section>
 </details>
 
