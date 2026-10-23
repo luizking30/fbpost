@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "FB AutoPost — Publicador em Grupos",
+  "version": "0.1.0",
+  "description": "Postagem automatizada em grupos do Facebook via GraphQL interno",
+  "permissions": ["storage", "tabs", "sidePanel"],
+  "host_permissions": ["https://www.facebook.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "FB AutoPost" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.facebook.com/*"],
+      "js": ["inject.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.facebook.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
