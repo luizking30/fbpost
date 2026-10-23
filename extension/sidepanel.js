@@ -7,6 +7,8 @@ const TIPOS = {
   post: "Post", postFoto: "Post+foto", comentario: "Comentário",
   comentarioFoto: "Coment+foto", like: "Like", entrar: "Entrar",
   busca: "Busca", feed: "Feed", membros: "Membros", amigo: "Amizade",
+  membros_admins: "Admins", membros_experts: "Experts",
+  membros_contributors: "Contrib.", membros_near_you: "Perto",
 };
 
 function registrar(msg, cls = "l-info") {
@@ -41,11 +43,39 @@ async function comando(acao, dados) {
 
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 const aleatorio = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
-const variar = (texto) =>
-  texto.replace(/\{([^{}]+)\}/g, (_, opcoes) => {
+
+// spintax: {a|b} inline + {{nome}} com listas nomeadas (giro persistente)
+const contadoresSpin = new Map();
+const aplicarSpintax = (texto, vars) => {
+  let saida = texto.replace(/\{\{\s*([\w]+)\s*\}\}/g, (m, nome) => {
+    const v = vars?.[nome.trim().toLowerCase()];
+    if (!v || !v.length) return m;
+    if (v.length === 1) return v[0];
+    const i = contadoresSpin.get(nome) ?? 0;
+    contadoresSpin.set(nome, (i + 1) % v.length);
+    return v[i];
+  });
+  return saida.replace(/\{([^{}]+)\}/g, (_, opcoes) => {
     const partes = opcoes.split("|").map((s) => s.trim()).filter(Boolean);
     return partes.length ? partes[Math.floor(Math.random() * partes.length)] : "";
   });
+};
+
+const lerVars = () => {
+  const vars = {};
+  for (const linha of $("vars").value.split("\n")) {
+    const m = linha.match(/^\s*([\w]+)\s*=\s*(.+)$/);
+    if (!m) continue;
+    vars[m[1].toLowerCase()] = m[2].split("|").map((s) => s.trim()).filter(Boolean);
+  }
+  return vars;
+};
+
+const lerMensagens = () =>
+  $("mensagem").value.split(/^\s*---\s*$/m).map((s) => s.trim()).filter(Boolean);
+
+const salvarFila = (fila) => chrome.storage.local.set({ fila });
+const limparFila = () => chrome.storage.local.remove(["fila", "retomarPendente"]);
 
 const resolver = async (bruto) => {
   const r = await comando("resolver", { bruto });
@@ -63,18 +93,24 @@ function controle(estado) {
 }
 
 // ---------- postar ----------
-async function postar() {
-  const grupos = $("grupos").value.split("\n").map((s) => s.trim()).filter(Boolean);
-  const texto = $("mensagem").value.trim();
+async function postar(estadoInicial) {
+  const grupos = estadoInicial?.grupos ??
+    $("grupos").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const mensagens = estadoInicial?.mensagens ?? lerMensagens();
+  const vars = estadoInicial?.vars ?? lerVars();
+  const modo = estadoInicial?.modo ?? $("modo").value;
+  const limiteRodada = estadoInicial?.limiteRodada ?? Math.max(0, +$("limiteRodada").value || 0);
+  const inicio = estadoInicial?.inicio ?? 0;
   const dmin = Math.max(5, +$("dmin").value || 60);
   const dmax = Math.max(dmin, +$("dmax").value || 180);
   const foto = $("foto").files[0];
 
   if (!grupos.length) return registrar("Lista de grupos vazia", "l-err");
-  if (!texto && !foto) return registrar("Mensagem vazia", "l-err");
+  if (!mensagens.length && !foto && !estadoInicial?.fotoDataUrl)
+    return registrar("Mensagem vazia", "l-err");
 
-  let fotoDataUrl;
-  if (foto) {
+  let fotoDataUrl = estadoInicial?.fotoDataUrl;
+  if (foto && !fotoDataUrl) {
     fotoDataUrl = await new Promise((res, rej) => {
       const r = new FileReader();
       r.onload = () => res(r.result);
@@ -90,36 +126,71 @@ async function postar() {
       registrar("Motor não respondeu — recarregue a aba do Facebook", "l-err");
       return;
     }
-    registrar(`Motor ok — calibrações: ${ping.calibracoes.join(", ") || "nenhuma"}`);
+    if (!ping.sessao)
+      registrar("SESSÃO INVÁLIDA — faça login no Facebook", "l-err");
+    registrar(`Motor ok — calibrações: ${ping.calibracoes.join(", ") || "nenhuma"} | doc_ids minerados: ${ping.docIds}`);
     if (!ping.calibracoes.includes("post"))
       registrar("Sem calibração de post: poste manualmente num grupo", "l-warn");
 
+    const fim = limiteRodada > 0 ? Math.min(grupos.length, inicio + limiteRodada) : grupos.length;
     const cache = {};
-    for (let i = 0; i < grupos.length; i++) {
+    let algumSucesso = false, ultimoCodigo = "", repetidos = 0, feitos = inicio;
+
+    for (let i = inicio; i < fim; i++) {
       if (parar) { registrar("Interrompido", "l-warn"); break; }
       const g = grupos[i];
       $("progresso").textContent = `${i + 1}/${grupos.length} — ${g}`;
+      const msg = mensagens.length
+        ? aplicarSpintax(
+            modo === "aleatorio"
+              ? mensagens[Math.floor(Math.random() * mensagens.length)]
+              : mensagens[i % mensagens.length],
+            vars)
+        : "";
       try {
         if (!cache[g]) cache[g] = await resolver(g);
         const res = await comando("postar", {
-          idGrupo: cache[g], texto, fotoDataUrl,
+          idGrupo: cache[g], texto: msg, fotoDataUrl,
         });
+        feitos = i + 1;
         if (res.resultado === "ok") {
-          registrar(`${g}: ${res.situacao || "publicado"}`, "l-ok");
+          algumSucesso = true; repetidos = 0; ultimoCodigo = "";
+          registrar(`${g}: ${res.situacao || "publicado"}${res.postId ? " (id " + res.postId + ")" : ""}`, "l-ok");
         } else if (res.resultado === "bloqueado") {
           registrar(`${g}: BLOQUEIO — ${res.erro}. Parando tudo.`, "l-err");
+          await salvarFila({ grupos, mensagens, vars, modo, limiteRodada, inicio: feitos, fotoDataUrl });
           break;
         } else {
           registrar(`${g}: erro — ${res.erro}`, "l-warn");
+          const codigo = res.erro?.match(/code\s+(\d+)|código\s+(\d+)/i)?.[1] ?? "";
+          if (codigo && codigo === ultimoCodigo) repetidos++;
+          else { ultimoCodigo = codigo; repetidos = 1; }
+          if (!algumSucesso && repetidos >= 5) {
+            registrar(`5 erros iguais seguidos (código ${codigo}) — calibração provavelmente podre. Parando.`, "l-err");
+            break;
+          }
         }
       } catch (e) {
         registrar(`${g}: ${e.message}`, "l-warn");
       }
-      if (i < grupos.length - 1 && !parar) {
+      if (i < fim - 1 && !parar) {
         const espera = aleatorio(dmin, dmax);
         $("progresso").textContent = `${i + 1}/${grupos.length} — aguardando ${espera}s`;
         for (let s = 0; s < espera && !parar; s++) await dormir(1000);
       }
+    }
+
+    // pacote: sobrou fila → agenda retomada
+    if (feitos < grupos.length && !parar) {
+      const rMin = Math.max(0, +$("retMin").value || 2);
+      const rMax = Math.max(rMin, +$("retMax").value || 6);
+      const horas = rMin + Math.random() * (rMax - rMin);
+      await salvarFila({ grupos, mensagens, vars, modo, limiteRodada, inicio: feitos, fotoDataUrl });
+      await chrome.alarms.create("retomar_fila", { delayInMinutes: horas * 60 });
+      registrar(`PACOTE: ${feitos}/${grupos.length} feitos — retomando em ~${horas.toFixed(1)}h`, "l-warn");
+    } else {
+      await limparFila();
+      await chrome.alarms.clear("retomar_fila");
     }
   } catch (e) {
     registrar(e.message, "l-err");
@@ -199,7 +270,11 @@ async function engajar() {
   const delay = Math.max(5, +$("engDelay").value || 30);
   const querLike = $("engLike").checked;
   const querComentario = $("engComentar").checked;
+  const soDiferentes = $("engSoDiferentes").checked;
+  const dedup = $("engDedup").checked;
   const textos = $("engTextos").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const vars = lerVars();
+  const { interagidos = {}, autores = {} } = await chrome.storage.local.get(["interagidos", "autores"]);
 
   if (!grupo) return registrar("Informe o grupo", "l-err");
   if (!querLike && !querComentario) return registrar("Marque curtir e/ou comentar", "l-err");
@@ -227,6 +302,8 @@ async function engajar() {
       for (const p of feed.posts) {
         if (parar) break outer;
         if (feitos >= limite) break outer;
+        if (dedup && interagidos[p.feedbackId]) continue;
+        if (soDiferentes && p.autorId && autores[p.autorId]) continue;
         $("progresso").textContent = `Post ${feitos + 1}/${limite}`;
         if (querLike) {
           const r = await comando("curtir", { feedbackId: p.feedbackId });
@@ -234,22 +311,27 @@ async function engajar() {
             registrar(`BLOQUEIO no like — ${r.erro}. Parando.`, "l-err");
             break outer;
           }
-          if (r.resultado === "ok") registrar(`like em ${p.feedbackId.slice(0, 18)}…`, "l-ok");
-          else registrar(`like falhou: ${r.erro}`, "l-warn");
+          if (r.resultado === "ok") {
+            interagidos[p.feedbackId] = Date.now();
+            registrar(`like em ${p.feedbackId.slice(0, 18)}…`, "l-ok");
+          } else registrar(`like falhou: ${r.erro}`, "l-warn");
           await dormir(aleatorio(3, 8) * 1000);
         }
         if (querComentario) {
-          const texto = variar(textos[idxTexto++ % textos.length]);
+          const texto = aplicarSpintax(textos[idxTexto++ % textos.length], vars);
           const r = await comando("comentar", { feedbackId: p.feedbackId, texto });
           if (r.resultado === "bloqueado") {
             registrar(`BLOQUEIO no comentário — ${r.erro}. Parando.`, "l-err");
             break outer;
           }
-          if (r.resultado === "ok")
+          if (r.resultado === "ok") {
+            interagidos[p.feedbackId] = Date.now();
             registrar(`comentou (${r.situacao}) em ${p.feedbackId.slice(0, 18)}…`, "l-ok");
-          else registrar(`comentário falhou: ${r.erro}`, "l-warn");
+          } else registrar(`comentário falhou: ${r.erro}`, "l-warn");
         }
+        if (soDiferentes && p.autorId) autores[p.autorId] = Date.now();
         feitos++;
+        await chrome.storage.local.set({ interagidos, autores });
         await dormir(delay * 1000);
       }
       if (!cursor) break;
@@ -301,6 +383,7 @@ async function amizade() {
 // ---------- aquecer ----------
 async function aquecer() {
   const grupo = $("warmGrupo").value.trim();
+  const tipo = $("warmTipo").value;
   const limite = Math.max(1, +$("warmLimite").value || 10);
   const delay = Math.max(15, +$("warmDelay").value || 60);
   if (!grupo) return registrar("Informe o grupo", "l-err");
@@ -312,7 +395,7 @@ async function aquecer() {
     outer: while (enviados < limite && paginas < 20) {
       if (parar) { registrar("Interrompido", "l-warn"); break; }
       paginas++;
-      const res = await comando("membros", { idGrupo: gid, cursor });
+      const res = await comando("membros", { idGrupo: gid, cursor, tipo });
       if (res.resultado === "bloqueado") {
         registrar(`BLOQUEIO — ${res.erro}`, "l-err");
         break;
@@ -372,4 +455,16 @@ chrome.storage.onChanged.addListener((c) => {
 chrome.runtime.onMessage.addListener((m) => {
   if (m.tipo === "capturado")
     registrar(`Aprendido: ${TIPOS[m.dados.tipo] || m.dados.tipo} (${m.dados.nomeAmigavel})`, "l-info");
+  if (m.tipo === "stats" && m.dados.docIds)
+    registrar(`${m.dados.docIds} doc_ids minerados da página`, "l-info");
 });
+
+// ---------- retomada de lote ----------
+(async () => {
+  const { retomarPendente, fila } = await chrome.storage.local.get(["retomarPendente", "fila"]);
+  if (retomarPendente && fila?.grupos?.length) {
+    registrar(`Retomando lote: ${fila.inicio}/${fila.grupos.length} já feitos`, "l-info");
+    await chrome.storage.local.remove("retomarPendente");
+    postar(fila);
+  }
+})();

@@ -69,8 +69,27 @@
   <section>
     <label>Grupos (URL ou slug — um por linha)</label>
     <textarea id="grupos" rows="4" placeholder="https://www.facebook.com/groups/123456"></textarea>
-    <label>Mensagem</label>
-    <textarea id="mensagem" rows="3" placeholder="Texto da publicação..."></textarea>
+    <label>Mensagens (separe várias com uma linha <code>---</code>)</label>
+    <textarea id="mensagem" rows="4" placeholder="Texto da publicação...&#10;---&#10;Outra variação..."></textarea>
+    <label>Variáveis spintax — <code>nome=v1|v2|v3</code> por linha, use {{nome}} no texto</label>
+    <textarea id="vars" rows="2" placeholder="saudacao=Olá|Oi|Opa"></textarea>
+    <div class="row">
+      <div>
+        <label>Rotação</label>
+        <select id="modo" style="width:100%;background:#0d1017;color:#e5e7eb;border:1px solid #2d3442;border-radius:6px;padding:8px">
+          <option value="sequencial">Sequencial</option>
+          <option value="aleatorio">Aleatória</option>
+        </select>
+      </div>
+      <div>
+        <label>Limite por rodada (0=todos)</label>
+        <input id="limiteRodada" type="number" value="0" min="0">
+      </div>
+    </div>
+    <div class="row">
+      <div><label>Retomar lote após (h mín)</label><input id="retMin" type="number" value="2" min="0"></div>
+      <div><label>(h máx)</label><input id="retMax" type="number" value="6" min="0"></div>
+    </div>
     <label>Foto (opcional — precisa ter postado com foto 1x)</label>
     <input type="file" id="foto" accept="image/*">
     <div class="row">
@@ -114,6 +133,14 @@
       <div><label>Limite de pedidos</label><input id="warmLimite" type="number" value="10" min="1" max="100"></div>
       <div><label>Delay (s)</label><input id="warmDelay" type="number" value="60" min="15"></div>
     </div>
+    <label>Tipo de membro (precisa calibração da aba correspondente)</label>
+    <select id="warmTipo" style="width:100%;background:#0d1017;color:#e5e7eb;border:1px solid #2d3442;border-radius:6px;padding:8px;margin-bottom:8px">
+      <option value="membros">Todos os membros</option>
+      <option value="membros_admins">Só admins</option>
+      <option value="membros_experts">Só experts</option>
+      <option value="membros_contributors">Só contribuidores</option>
+      <option value="membros_near_you">Perto de você</option>
+    </select>
     <button class="sec" id="btnAquecer">Aquecer perfil</button>
   </section>
 </details>
@@ -129,6 +156,8 @@
     </div>
     <div class="check"><input type="checkbox" id="engLike" checked><span>Curtir posts</span></div>
     <div class="check"><input type="checkbox" id="engComentar"><span>Comentar posts</span></div>
+    <div class="check"><input type="checkbox" id="engSoDiferentes"><span>Só autores diferentes</span></div>
+    <div class="check"><input type="checkbox" id="engDedup" checked><span>Não repetir posts já interagidos</span></div>
     <label>Comentários (um por linha, gira — use {a|b} pra variar)</label>
     <textarea id="engTextos" rows="3" placeholder="Top! {Parabéns|Show|Ótimo}"></textarea>
     <button id="btnEngajar">Engajar</button>

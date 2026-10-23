@@ -83,6 +83,22 @@ Estas técnicas já estão implementadas no nosso `inject.js`:
   (feed→like+comentário com spintax `{a|b}`), Amizade/Aquecer
   (pedidos por lista de perfis ou membros de grupo, filtra CAN_REQUEST).
 
+v4 adicionou (paridade com Pulso):
+- **Rotação de mensagens**: várias por `---`, modo sequencial/aleatório
+- **Spintax**: `{{nome}}` com listas `nome=v1|v2` (giro persistente) + `{a|b}` inline
+- **Lotes**: limite por rodada → salva fila no storage → `chrome.alarms`
+  retoma em 2-6h → `sidePanel.open()` + autoresume
+- **Anti-spam**: 5 erros com mesmo código seguidos sem sucesso → para
+- **Dedup persistente**: `interagidos` (feedbackId) + `autores` em storage;
+  opção "só autores diferentes" no Engajar
+- **Session check**: `ping` retorna `sessao` (cookie+dtsg) — painel avisa
+- **Doc_id mining**: regex no HTML/scripts JSON da página a cada 60s
+  (`__SP_DOCIDS`, contagem no ping)
+- **Membros por tipo**: `membros_admins/experts/contributors/near_you`
+  pela rota `/members/<tipo>` — aquecer pode mirar só admins
+- **Pending probes**: `GroupPendingPost`, `pending_state`,
+  `if_viewer_can_learn_more_about_pending_post` + extração de `postId`
+
 **Pendente de validação real**: heurísticas de extração de `variables`
 podem precisar ajuste fino (estruturas variam entre mutations do FB).
 
@@ -97,8 +113,11 @@ podem precisar ajuste fino (estruturas variam entre mutations do FB).
 6. [x] Responder perguntas de grupo automaticamente ("ok" em todos campos)
 7. [x] Pedidos de amizade em massa (lista de perfis + membros de grupo)
 8. [x] Aquecedor de perfil (= pedidos de amizade a membros, como o Pulso)
-9. [ ] Multi-conta (perfis Chrome separados; depois proxies)
-10. [ ] SaaS: backend de licença/assinatura (modelo do Pulso como referência)
+9. [ ] Vídeo (pipeline start→upload→receive→finalize) e foto+vídeo misto
+10. [ ] Marketplace listings (título/preço/xpost)
+11. [ ] Motor DOM fallback (clicar quando sem calibração GraphQL)
+12. [ ] Multi-conta (perfis Chrome separados; depois proxies)
+13. [ ] SaaS: backend de licença/assinatura (modelo do Pulso como referência)
 
 ## Como testar
 

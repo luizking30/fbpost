@@ -16,6 +16,11 @@
       return;
     }
 
+    if (d.tipo === "stats") {
+      chrome.runtime.sendMessage({ tipo: "stats", dados: d.dados }).catch(() => {});
+      return;
+    }
+
     if (d.tipo === "resposta" && pendentes.has(d.dados.id)) {
       pendentes.get(d.dados.id)(d.dados.resultado);
       pendentes.delete(d.dados.id);

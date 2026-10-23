@@ -3,7 +3,7 @@
   "name": "FB AutoPost — Publicador em Grupos",
   "version": "0.1.0",
   "description": "Postagem automatizada em grupos do Facebook via GraphQL interno",
-  "permissions": ["storage", "tabs", "sidePanel"],
+  "permissions": ["storage", "tabs", "sidePanel", "alarms", "unlimitedStorage"],
   "host_permissions": ["https://www.facebook.com/*"],
   "background": { "service_worker": "background.js" },
   "action": { "default_title": "FB AutoPost" },

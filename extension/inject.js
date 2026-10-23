@@ -388,8 +388,31 @@
     }
     if (RE_BLOQUEIO_TEXTO.test(bruto))
       return { resultado: "bloqueado", erro: "texto de bloqueio detectado" };
-    if (RE_PENDENTE.test(bruto)) return { resultado: "ok", situacao: "pendente" };
-    return { resultado: "ok", situacao: "publicado" };
+    const pendente =
+      /"__typename":"(?:GroupPendingStory|GroupPendingPost|PendingParticipationPost)"/.test(bruto) ||
+      /"(?:pending_state|approval_status|moderation_state)":"?(?:PENDING|AWAITING[A-Z_]*|UNAPPROVED)"?/i.test(bruto) ||
+      /"if_viewer_can_learn_more_about_pending_post":\s*(?!null|false)\S/.test(bruto) ||
+      RE_PENDENTE.test(bruto);
+    if (pendente) {
+      const postId = acharPostId(objs);
+      return { resultado: "ok", situacao: "pendente", postId };
+    }
+    const postId = acharPostId(objs);
+    return { resultado: "ok", situacao: "publicado", postId };
+  };
+
+  const acharPostId = (objs) => {
+    for (const o of objs) {
+      const s = JSON.stringify(o);
+      const id = pegarPrimeiro(
+        s,
+        /"post_id":"?(\d{6,})/,
+        /"legacy_story_hideable_id":"?(\d{6,})/,
+        /"story":{"id":"(\d{6,})/,
+        /"creation_story":[^}]*"id":"(\d{6,})/
+      );
+      if (id) return id;
+    }
   };
 
   // ---------- captura ----------
@@ -521,10 +544,16 @@
         return;
       }
 
-      // lista de membros de grupo
+      // lista de membros de grupo (por tipo de rota)
       if (RE.membros.test(nome)) {
         const gid = acharIdGrupo(vars);
-        if (gid) registrarCaptura("membros", { ...base, sampleGroupId: gid });
+        if (gid) {
+          const rota = location.pathname.match(
+            /\/members\/(admins|experts|contributors|near_you)/
+          )?.[1];
+          registrarCaptura(rota ? `membros_${rota}` : "membros",
+            { ...base, sampleGroupId: gid });
+        }
         return;
       }
     } catch {}
@@ -905,8 +934,8 @@
     return cursor;
   };
 
-  async function membrosDoGrupo({ idGrupo, cursor }) {
-    const cal = window.__SP_CAPTURAS.membros;
+  async function membrosDoGrupo({ idGrupo, cursor, tipo }) {
+    const cal = window.__SP_CAPTURAS[tipo || "membros"] ?? window.__SP_CAPTURAS.membros;
     if (!cal) return { resultado: "erro", erro: "sem calibração de membros — abra a aba Membros de um grupo" };
     const postando = window.__fbPostando;
     window.__fbPostando = true;
@@ -977,7 +1006,12 @@
         else if (acao === "amizade") resultado = await pedirAmizade(dados);
         else if (acao === "perfil") resultado = await resolverPerfil(dados.bruto);
         else if (acao === "ping")
-          resultado = { ok: true, calibracoes: Object.keys(window.__SP_CAPTURAS) };
+          resultado = {
+            ok: true,
+            calibracoes: Object.keys(window.__SP_CAPTURAS),
+            docIds: window.__SP_DOCIDS ? window.__SP_DOCIDS.size : 0,
+            sessao: !!(uidAtual() && dtsgDaPagina()),
+          };
         else resultado = { resultado: "erro", erro: "ação desconhecida" };
         emitir("resposta", { id, resultado });
       } catch (e) {
@@ -985,4 +1019,38 @@
       }
     })();
   });
+
+  // ---------- mineração de doc_ids do HTML ----------
+  function minerarDocIds() {
+    window.__SP_DOCIDS = window.__SP_DOCIDS || new Map();
+    const mapa = window.__SP_DOCIDS;
+    const fontes = [];
+    document
+      .querySelectorAll('script[type="application/json"]')
+      .forEach((s) => {
+        const t = s.textContent?.trim();
+        if (t && t.length < 4e6) fontes.push(t);
+      });
+    fontes.push(document.documentElement.innerHTML.slice(0, 4e6));
+    const antes = mapa.size;
+    const r1 = /"fb_api_req_friendly_name"\s*:\s*"([^"]+)"[\s\S]{0,1200}?"doc_id"\s*:\s*"?(\d{8,})"?/g;
+    const r2 = /"doc_id"\s*:\s*"?(\d{8,})"?[\s\S]{0,1200}?"fb_api_req_friendly_name"\s*:\s*"([^"]+)"/g;
+    for (const fonte of fontes) {
+      let m;
+      for (; (m = r1.exec(fonte)); ) mapa.set(m[1], m[2]);
+      for (; (m = r2.exec(fonte)); ) mapa.set(m[2], m[1]);
+    }
+    if (mapa.size !== antes)
+      emitir("stats", { docIds: mapa.size, novos: mapa.size - antes });
+  }
+
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", () => {
+      minerarDocIds();
+      setInterval(minerarDocIds, 60000);
+    });
+  else {
+    minerarDocIds();
+    setInterval(minerarDocIds, 60000);
+  }
 })();
