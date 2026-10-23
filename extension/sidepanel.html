@@ -78,12 +78,29 @@
   #progresso { color: #9ca3af; font-size: 11px; text-align: center;
                margin-bottom: 6px; min-height: 14px; }
   #btnParar { display: none; margin-bottom: 6px; }
+  #btnPausar { display: none; margin-bottom: 6px; }
   #log { background: #0a0c10; border: 1px solid #262c3a; border-radius: 6px;
          height: 140px; overflow-y: auto; padding: 8px;
          font-family: Consolas, monospace; font-size: 11px;
          white-space: pre-wrap; }
   .l-ok { color: #4ade80; } .l-err { color: #f87171; }
   .l-warn { color: #fbbf24; } .l-info { color: #93c5fd; }
+
+  /* biblioteca: drawer + seleção */
+  .lib-btn { float: right; }
+  #libDrawer { display: none; position: fixed; right: 0; top: 0; bottom: 0;
+    width: 260px; background: #161a22; border-left: 1px solid #262c3a;
+    padding: 10px; overflow-y: auto; z-index: 50; }
+  #libDrawer h3 { font-size: 12px; color: #60a5fa; margin-bottom: 8px; }
+  .lib-item { display: flex; align-items: center; gap: 6px; padding: 6px;
+    border: 1px solid #2d3442; border-radius: 6px; margin-bottom: 6px;
+    cursor: pointer; font-size: 12px; }
+  .lib-item:hover { border-color: #3b82f6; }
+  .lib-item span { flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .lib-sel { display: flex; flex-wrap: wrap; gap: 4px; margin: -4px 0 8px; }
+  .lib-sel .chip { cursor: pointer; }
+  .lib-sel .chip::after { content: "×"; margin-left: 4px; color: #f87171; }
 </style>
 </head>
 <body>
@@ -91,7 +108,9 @@
 <header>
   <h1>FB AutoPost</h1>
   <span id="sessaoDot" class="dot" title="Verificando sessão..."></span>
-  <button class="sec" id="btnStudio" style="width:auto;padding:4px 10px;font-size:11px;font-weight:400">Tela cheia</button>
+  <button class="sec" id="btnProbe" title="listingProbe: grava shapes das requests p/ mapear fluxos novos" style="width:auto;padding:4px 10px;font-size:11px;font-weight:400">● Gravar</button>
+  <button class="sec" id="btnRelatorio" title="Baixa o histórico de ações (JSON)" style="width:auto;padding:4px 10px;font-size:11px;font-weight:400">↓ Rel.</button>
+  <button class="sec" id="btnStudio" style="width:auto;padding:4px 10px;font-size:11px;font-weight:400">Studio</button>
 </header>
 
 <nav class="tabs">
@@ -111,9 +130,13 @@
       <h2>Postar em grupos</h2>
       <label>Grupos (URL ou slug — um por linha)</label>
       <textarea id="grupos" rows="4" placeholder="https://www.facebook.com/groups/123456"></textarea>
-      <label>Mensagens (separe várias com uma linha <code>---</code>)</label>
+      <label>Mensagens (separe várias com uma linha <code>---</code>)
+        <button class="sec lib-btn" data-lib="textos" data-alvo="mensagem" style="width:auto;padding:2px 8px;font-size:10px">biblioteca</button>
+      </label>
       <textarea id="mensagem" rows="4" placeholder="Texto da publicação...&#10;---&#10;Outra variação..."></textarea>
-      <label>Variáveis spintax — <code>nome=v1|v2|v3</code> por linha, use {{nome}} no texto</label>
+      <label>Variáveis spintax — <code>nome=v1|v2|v3</code> por linha, use {{nome}} no texto
+        <button class="sec lib-btn" data-lib="variaveis" data-alvo="vars" style="width:auto;padding:2px 8px;font-size:10px">biblioteca</button>
+      </label>
       <textarea id="vars" rows="2" placeholder="saudacao=Olá|Oi|Opa"></textarea>
       <div class="row">
         <div>
@@ -132,20 +155,42 @@
         <div><label>Retomar lote após (h mín)</label><input id="retMin" type="number" value="2" min="0"></div>
         <div><label>(h máx)</label><input id="retMax" type="number" value="6" min="0"></div>
       </div>
-      <label>Fotos (opcional, várias = variações — precisa ter postado com foto 1x)</label>
+      <label>Fotos (opcional, várias = variações — precisa ter postado com foto 1x)
+        <button class="sec lib-btn" data-lib="midias:imagem" data-alvo="foto" style="width:auto;padding:2px 8px;font-size:10px">biblioteca</button>
+      </label>
       <input type="file" id="foto" accept="image/*" multiple>
-      <label>Vídeos (opcional, vários = variações — precisa ter postado com vídeo 1x)</label>
+      <div class="lib-sel" id="sel-foto"></div>
+      <label>Vídeos (opcional, vários = variações — precisa ter postado com vídeo 1x)
+        <button class="sec lib-btn" data-lib="midias:video" data-alvo="video" style="width:auto;padding:2px 8px;font-size:10px">biblioteca</button>
+      </label>
       <input type="file" id="video" accept="video/*" multiple>
+      <div class="lib-sel" id="sel-video"></div>
       <div class="row">
         <button class="sec" id="btnMeusGrupos">Carregar meus grupos</button>
         <button class="sec" id="btnLimparLista">Limpar lista</button>
+      </div>
+      <div class="row">
+        <select id="listasSalvas" style="flex:1"></select>
+        <button class="sec" id="btnInserirLista">Inserir</button>
+        <button class="sec" id="btnExcluirLista" title="Apaga a lista salva selecionada">✕</button>
       </div>
       <div class="hint" style="margin-bottom:8px">"Meus grupos" usa a Graph API p/ listar todos os seus grupos — sem precisar buscar.</div>
       <div class="row">
         <div><label>Delay mín (s)</label><input id="dmin" type="number" value="60" min="5"></div>
         <div><label>Delay máx (s)</label><input id="dmax" type="number" value="180" min="5"></div>
       </div>
+      <div class="row">
+        <div>
+          <label>Agendar pra (opcional — dispara e roda sozinho)</label>
+          <input id="agendarPara" type="datetime-local">
+        </div>
+        <div>
+          <label>Repetir a cada N horas (0 = não)</label>
+          <input id="postRepetir" type="number" value="0" min="0" max="720">
+        </div>
+      </div>
       <button id="btnPostar">Iniciar postagens</button>
+      <button class="sec" id="btnAgendar">Agendar fila</button>
     </section>
   </div>
 
@@ -158,8 +203,14 @@
       <div id="resultados" style="margin-top:8px"></div>
       <div class="check"><input type="checkbox" id="joinPerguntas"><span>Responder perguntas do grupo automaticamente</span></div>
       <div class="row">
+        <div><label>Lote: pausa 2-6h a cada N entradas (0 = desligado)</label><input id="joinLote" type="number" value="0" min="0" max="50"></div>
+        <div><label>Agendar pra</label><input id="joinAgendarPara" type="datetime-local"></div>
+      </div>
+      <div class="row">
         <button class="sec" id="btnAddLista">Selecionados → lista</button>
+        <button class="sec" id="btnSalvarLista" title="Salva a seleção como lista nomeada">Salvar lista</button>
         <button id="btnEntrar">Entrar nos selecionados</button>
+        <button class="sec" id="btnAgendarEntrar">Agendar entradas</button>
       </div>
     </section>
   </div>
@@ -182,6 +233,15 @@
         <div><label>Gap entre grupos (s mín)</label><input id="engGapMin" type="number" value="120" min="5"></div>
         <div><label>(s máx)</label><input id="engGapMax" type="number" value="240" min="5"></div>
       </div>
+      <div class="row">
+        <div><label>Gap entre listas <code>---</code> (s mín)</label><input id="engListaMin" type="number" value="300" min="5"></div>
+        <div><label>(s máx)</label><input id="engListaMax" type="number" value="600" min="5"></div>
+      </div>
+      <div class="row">
+        <div><label>Lote: pausa 2-6h a cada N grupos (0 = desligado)</label><input id="engLote" type="number" value="0" min="0" max="50"></div>
+        <div><label>Agendar pra</label><input id="engAgendarPara" type="datetime-local"></div>
+      </div>
+      <div class="check"><input type="checkbox" id="engDom"><span>Modo DOM — roda no feed aberto (sem calibração)</span></div>
       <div class="check"><input type="checkbox" id="engLike" checked><span>Curtir posts</span></div>
       <div class="check"><input type="checkbox" id="engComentar"><span>Comentar posts</span></div>
       <div class="check"><input type="checkbox" id="engSoDiferentes"><span>Só autores diferentes</span></div>
@@ -193,11 +253,17 @@
         <option value="ambos">Texto + imagem</option>
         <option value="aleatorio">Aleatório (texto ou imagem)</option>
       </select>
-      <label>Comentários (um por linha, gira — use {a|b} pra variar)</label>
+      <label>Comentários (um por linha, gira — use {a|b} pra variar)
+        <button class="sec lib-btn" data-lib="textos" data-alvo="engTextos" style="width:auto;padding:2px 8px;font-size:10px">biblioteca</button>
+      </label>
       <textarea id="engTextos" rows="3" placeholder="Top! {Parabéns|Show|Ótimo}"></textarea>
-      <label>Foto do comentário (precisa ter comentado com foto 1x)</label>
+      <label>Foto do comentário (precisa ter comentado com foto 1x)
+        <button class="sec lib-btn" data-lib="midias:imagem" data-alvo="engFoto" style="width:auto;padding:2px 8px;font-size:10px">biblioteca</button>
+      </label>
       <input type="file" id="engFoto" accept="image/*">
+      <div class="lib-sel" id="sel-engFoto"></div>
       <button id="btnEngajar">Engajar</button>
+      <button class="sec" id="btnAgendarEngajar">Agendar engajamento</button>
     </section>
   </div>
 
@@ -207,6 +273,12 @@
       <label>Perfis (URL/slug — um por linha)</label>
       <textarea id="perfis" rows="3" placeholder="https://www.facebook.com/usuario.exemplo&#10;profile.php?id=123456"></textarea>
       <div class="row">
+        <select id="listasPerfis" style="flex:1"></select>
+        <button class="sec" id="btnSalvarPerfis" title="Salva os perfis do campo como lista nomeada">Salvar</button>
+        <button class="sec" id="btnInserirPerfis">Inserir</button>
+        <button class="sec" id="btnExcluirPerfis" title="Apaga a lista selecionada">✕</button>
+      </div>
+      <div class="row">
         <div><label>Delay mín (s)</label><input id="amDelayMin" type="number" value="45" min="10"></div>
         <div><label>Delay máx (s)</label><input id="amDelayMax" type="number" value="120" min="10"></div>
       </div>
@@ -214,21 +286,24 @@
     </section>
     <section class="card">
       <h2>Aquecer perfil</h2>
-      <label>Mandar pedidos aos membros de um grupo</label>
-      <input type="text" id="warmGrupo" placeholder="https://www.facebook.com/groups/123456">
+      <label>Mandar pedidos aos membros — vários grupos, um por linha (cota dividida igualmente)</label>
+      <textarea id="warmGrupo" rows="2" placeholder="https://www.facebook.com/groups/123456"></textarea>
       <div class="row">
         <div><label>Limite de pedidos</label><input id="warmLimite" type="number" value="10" min="1" max="100"></div>
         <div><label>Delay (s)</label><input id="warmDelay" type="number" value="60" min="15"></div>
+        <div><label>Agendar pra</label><input id="warmAgendarPara" type="datetime-local"></div>
       </div>
-      <label>Tipo de membro (precisa calibração da aba correspondente)</label>
-      <select id="warmTipo">
-        <option value="membros">Todos os membros</option>
-        <option value="membros_admins">Só admins</option>
-        <option value="membros_experts">Só experts</option>
-        <option value="membros_contributors">Só contribuidores</option>
-        <option value="membros_near_you">Perto de você</option>
-      </select>
+      <label>Tipos de membro (precisa calibração da aba correspondente; admins excluído por padrão)</label>
+      <div class="row" id="warmTipos" style="flex-wrap:wrap">
+        <label><input type="checkbox" value="membros" checked> todos</label>
+        <label><input type="checkbox" value="membros_things_in_common" checked> em comum</label>
+        <label><input type="checkbox" value="membros_experts" checked> experts</label>
+        <label><input type="checkbox" value="membros_contributors" checked> contribuidores</label>
+        <label><input type="checkbox" value="membros_near_you" checked> perto</label>
+        <label><input type="checkbox" value="membros_admins"> admins</label>
+      </div>
       <button class="sec" id="btnAquecer">Aquecer perfil</button>
+      <button class="sec" id="btnAgendarAquecer">Agendar aquecimento</button>
     </section>
   </div>
 
@@ -241,8 +316,11 @@
       <input type="text" id="mkPreco" placeholder="ex: 450">
       <label>Descrição</label>
       <textarea id="mkDescricao" rows="3" placeholder="Descrição do anúncio..."></textarea>
-      <label>Fotos (várias — precisa ter publicado anúncio com fotos 1x)</label>
+      <label>Fotos (várias — precisa ter publicado anúncio com fotos 1x)
+        <button class="sec lib-btn" data-lib="midias:imagem" data-alvo="mkFotos" style="width:auto;padding:2px 8px;font-size:10px">biblioteca</button>
+      </label>
       <input type="file" id="mkFotos" accept="image/*" multiple>
+      <div class="lib-sel" id="sel-mkFotos"></div>
       <label>Grupos pra xpost (URL ou slug — um por linha, opcional)</label>
       <textarea id="mkGrupos" rows="3" placeholder="https://www.facebook.com/groups/123456"></textarea>
       <div class="check"><input type="checkbox" id="mkMarketplace" checked><span>Publicar também no Marketplace</span></div>
@@ -255,10 +333,14 @@
 
 <footer>
   <div id="progresso"></div>
+  <button class="sec" id="btnPausar">Pausar</button>
   <button class="sec" id="btnParar">Parar tudo</button>
+  <button class="sec" id="btnLimparDedup" title="Zera dedups: grupos entrados, pedidos de amizade, posts/autores interagidos e o descanso de 24h">Limpar dedup</button>
   <div id="log"></div>
 </footer>
 
+<div id="libDrawer"></div>
+<script src="biblioteca.js"></script>
 <script src="sidepanel.js"></script>
 </body>
 </html>

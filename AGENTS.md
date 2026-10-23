@@ -71,17 +71,25 @@ Estas técnicas já estão implementadas no nosso `inject.js`:
 
 `extension/` — motor completo portado (v2):
 
-- `inject.js`: sniffer multi-tipo + engine de replay.
-  Calibrações: `post`, `postFoto`, `comentario`, `comentarioFoto`,
-  `like`, `entrar`, `busca`, `feed`, `membros`, `amigo`.
+- `inject.js`: sniffer multi-tipo + engine de replay + motor DOM.
+  Calibrações: `post`, `postFoto`, `postVideo`, `postMisto`,
+  `comentario`, `comentarioFoto`, `like`, `entrar`, `busca`, `feed`,
+  `membros`(+`membros_admins/experts/contributors/near_you`), `amigo`,
+  `listing`. Candidatos: até 4 moldes/tipo em `__SP_CANDIDATOS`.
   Ações via ponte: `postar`, `resolver`, `curtir`, `comentar`,
-  `entrar`, `buscar`, `feed`, `membros`, `amizade`, `perfil`, `ping`.
+  `entrar`, `buscar`, `feed`, `membros`, `amizade`, `perfil`,
+  `listing`, `meusGrupos`, `engajarDom`, `domParar`, `probeIniciar`,
+  `probeParar`, `probesStats`, `ping`.
   Join suporta `responderPerguntas` (preenche campos answer/text com "ok").
-- `content.js`: ponte + persiste `calibracoes` por tipo no storage.
-- `sidepanel.*`: 4 módulos UI — Postar (com foto), Buscar+Entrar
-  (resultados clicáveis + auto-resposta a perguntas), Engajar
-  (feed→like+comentário com spintax `{a|b}`), Amizade/Aquecer
-  (pedidos por lista de perfis ou membros de grupo, filtra CAN_REQUEST).
+- `content.js`: ponte + persiste `calibracoes` e `probes` (scores)
+  no storage; repassa `domProgresso`/`domFim`/`stats`/`sessaoInvalidada`.
+- `sidepanel.*`: 5 abas — Postar (textos/fotos/vídeos múltiplos +
+  biblioteca), Buscar+Entrar, Engajar (GraphQL ou Modo DOM, listas
+  `---` com listGap), Amigos (amizade+aquecer), Anúncio (Marketplace).
+  Header: dot de sessão, "● Gravar" (listingProbe), "Studio".
+- `biblioteca.js`: IndexedDB `fb-autopost` (stores textos/variaveis/
+  midias) compartilhado entre sidepanel e studio.
+- `studio.html`+`studio.js`: painel embutido + gerenciador da biblioteca.
 
 v4 adicionou (paridade com Pulso):
 - **Rotação de mensagens**: várias por `---`, modo sequencial/aleatório
@@ -128,9 +136,307 @@ v5 portou do Pulso (motor + features):
 - UI: chips `postVideo`/`postMisto`/`listing`, input de vídeo (máx
   ~30MB), botões "Meus grupos"/"Limpar lista", seção Marketplace.
 
-Não portado ainda: probes ranqueados de postId/pending (adaptive),
-DOM fallback (execCommand/ClipboardEvent), IndexedDB (engageMedia/
-Variables/Profiles), multi-tab leader election, listingProbe.
+Não portado ainda: nada crítico — sobram só itens de backend/SaaS
+(créditos, auth, heartbeat, studio-bridge remoto). A ponte já foi
+endurecida na v7 abaixo.
+
+v6 portou do Pulso (motor + features):
+- **Probes ranqueados** (`Se`/`Te`/`Ue`/`Be`/`Ke` deles): 10 estratégias de
+  extração de postId + 10 de detecção de pendente; acerto soma score
+  (teto 500) → próximas respostas tentam primeiro o que mais acerta.
+  Scores por tipo de fluxo (post/like/feed/...) em `window.__SP_PROBES`,
+  persistidos via `probesStats` → storage e semeados na carga.
+- **Escopo p/ pending probes** (`je`/`Pe` deles): serializa o nó da
+  mutation (`story_create`|`*_create`|`story*` com ids) + até 10 linhas
+  JSONL seguintes, limite 8KB, ignora chaves grandes (`to`,
+  `leaders_engagement_logging_settings`, `comet_surface_mappings`).
+- **postId profundo** (`Ee`): `post_id|id|legacy_story_hideable_id` em
+  qualquer nó até 12 níveis — 1º probe (`json_deep_numeric`).
+- **Candidates em queries de leitura**: `buscar`/`feed`/`membros` tentam
+  os moldes de `__SP_CANDIDATOS` até um responder (busca testa na 1ª
+  página e fixa o molde vencedor; feed/membros por request). Membros
+  mistura candidatos do tipo pedido + geral, dedup por doc_id.
+- **DOM fallback** (`J`/`Qs`/`ea`/`na`/`ra`/`oa` deles — item 11):
+  SELETORES nomeados (feed/post/likeBtn/commentBtn/commentComposer/
+  postAuthor/pendingComment/blockModal/composerImage/fileInput);
+  `digitarDom` = execCommand("insertText") + fallback KeyboardEvent/
+  InputEvent por char; `colarImagemDom` = ClipboardEvent("paste") c/
+  DataTransfer+File + espera thumbnail + fallback `input.files=`;
+  Enter submete. Job `engajarDom` roda no feed aberto: pega próximo
+  artigo não processado (attr `data-fbap-idx`), like+comentário,
+  humanização (pula 0-2 posts iniciais, re-pula a cada 3-6 ações),
+  só-autores-diferentes por uid/slug/nome, watchdog de comentário
+  pendente (selo "Pendente/Pending" perto do post → bloqueio_pendente),
+  modal de bloqueio → para. Ações: `engajarDom`, `domParar`; eventos
+  `domProgresso`/`domFim` → sidepanel.
+- **listingProbe** (ferramenta de pesquisa deles): botão "● Gravar" no
+  painel → grava até 300 passos (kind graphql/upload/resposta, shape da
+  request com campos sensíveis redigidos, responseShape) → "■ Parar"
+  baixa JSON. É assim que se mapeia fluxo novo quando a captura quebra.
+- **IndexedDB biblioteca** (`engageMedia`/`engageVariables` deles):
+  `biblioteca.js` — db `fb-autopost` v1, stores `textos`/`variaveis`/
+  `midias` (blob). `studio.html`+`studio.js` = página de gerenciamento;
+  sidepanel tem botões "biblioteca" nos campos (textos/vars anexam,
+  mídias viram chips com dataUrl). Origem da extensão = compartilhado
+  entre sidepanel e studio.
+- **listGap 300-600s**: Engajar aceita várias listas separadas por
+  `---`; gap normal entre grupos da mesma lista, gap de lista entre
+  listas distintas.
+- **Multi-tab lock**: `navigator.locks.request("fb-autopost-job",
+  {ifAvailable:true})` — duas abas do FB não correm ação ao mesmo tempo.
+
+v7 portou do Pulso (segunda camada de paridade):
+- **Ponte v1 endurecida** (`t` deles — canal `ext-bridge`): envelope
+  `{fonte,direcao,versao:1,id(8-64),ts(±15s),acao,dados}` — dedup de id,
+  rate-limit 10/seg por ação, mensagens fora do formato ignoradas.
+  `content.js` emite o envelope; `inject.js` valida em `validarEntrada`.
+- **Erro rico**: `classificarResposta` extrai `api_error_code`, `severity`,
+  `is_transient` (→ campo `transiente` no resultado — postar retenta até
+  2x com 15-30s), `help_center_id` e `sentry_block_user_info` (= bloqueio
+  da CONTA, não da ação → resultado `bloqueado` com `bloqueioConta`).
+- **`photo_session_stale`**: `subirFoto` sem id + 1357004/"error" na
+  resposta → emite `photoSessionStale` → painel avisa pra recalibrar
+  postando foto manualmente.
+- **Mineração de resposta graphql na rota de membros**: fetch de
+  `/api/graphql/` quando `emRotaMembros()` → `minerarPares` no corpo da
+  resposta (fonte extra de doc_ids, além de bnzai/HTML).
+- **`things_in_common`**: rota `/members/things_in_common` vira
+  calibração `membros_things_in_common`; `membrosDoGrupo` aceita o tipo
+  e cai no fallback `membros` (como o F[] deles que mapeia pro membersCal).
+- **`profileGroupIds` no GROUP_WARM**: `entrar()` chama `meusGrupos`
+  antes da fila e pula ids onde já é membro mesmo sem estado na busca.
+- **PROFILE_WARM completo**: `aquecer()` aceita vários grupos (1/linha)
+  e vários tipos de membro (checkboxes; admins excluído por padrão);
+  cota dividida igualmente entre grupos (D deles); 2 páginas vazias no
+  tipo → próximo tipo; `stopIfExceedsAvailability` — >max(40,4×limite)
+  fetches de membros → para tudo.
+- **Lote no Engajar**: input `engLote` — a cada N grupos salva
+  `filaEngajar` (listas+posição+config+fotoDataUrl) e agenda
+  `retomar_fila` em 2-6h (batchSize deles). Retomada autodetecta
+  `filaEngajar` vs `fila` (postar) no boot do painel.
+- **Gate de sessão** (`checkSession` deles): `gateSessao()` — ping
+  motor+sessão antes de entrar/engajar/amizade/aquecer (postar já tinha).
+- **Seletores overridáveis** (`X.selectors` deles): `window.__SP_SELETORES
+  = {nome:[...]}` consultado antes dos defaults do DOM fallback.
+- **`uidAtual` robusto** (`he` deles): cookie `c_user` → link
+  `profile.php?id=` → meta `al:android:url`.
+- **`engajarDom` exige sessão** (uid+dtsg) além de feed visível.
+
+v8 portou do Pulso (UX + confiabilidade):
+- **Botão flutuante na página** (`#app-grupos-painel` deles): `content.js`
+  injeta `#fbap-fab` (fixed, bottom-right) em `/` e `/groups/*` —
+  clique abre o side panel (`abrirPainel` → background →
+  `sidePanel.open`; o gesto propaga via sendMessage). Some/aparece com
+  a rota SPA.
+- **Contexto invalidado** (index.js deles): `chrome.runtime?.id`
+  ausente ou `sendMessage` lançando → banner fixo "recarregue a
+  página" + remove o FAB.
+- **PAUSE/RESUME** (máquinas START/STOP/PAUSE/RESUME deles): flag
+  `pausado` + `esperarPausa()` segurando delays e início de iterações
+  — posição preservada, retoma de onde parou.
+- **`engageReports`**: store `relatorios` no IndexedDB (banco v2,
+  migração como o Dexie deles) — grava postar/curtir/comentar/entrar/
+  amizade/listing/engajarDom com resultado; botão "↓ Rel." exporta JSON.
+- **Dedup de amizade persistido** (`engageProfiles` deles):
+  `amizadeTentados` (uid→ts) — perfil com pedido <30d é pulado em
+  `amizade` e `aquecer`; `aquecer` também deduplica usuários entre
+  tipos de membro dentro da mesma rodada.
+- **Telemetria no ping** (snapshot deles): `appVersion`, `contaWork`,
+  `igBusiness`, `cohort` extraídos 1x do HTML — diagnóstico.
+
+v9 portou do Pulso (detalhes finais):
+- **`sentry_block_user_info` com detalhe**: erro de bloqueio extrai
+  title/body/duração do objeto quando presente na mensagem.
+- **`meusGrupos` paginado**: segue `paging.next` da Graph API até 10
+  páginas (usuário com >100 grupos recebe a lista completa).
+- **`autopost.due` (agendamento)**: input `datetime-local` + botão
+  "Agendar fila" — salva `fila` completa (mídias como dataUrl) e cria
+  `retomar_fila` com `when` absoluto; ao disparar, o background abre
+  o painel e `postar(fila)` executa sozinho.
+- **Menu contextual do FAB**: em `/groups/<slug>` o botão vira menu —
+  "Postar/Engajar/Aquecer neste grupo" grava `acaoPendente` e abre o
+  painel, que troca de aba e pré-enche o campo com a URL do grupo.
+
+v10 portou do Pulso (refinamentos):
+- **`needs_questions` sem request**: a busca já traz
+  `has_membership_questions` → `entrar()` pula grupos com perguntas
+  quando "responder perguntas" está desmarcado (zero request gasto).
+- **Pill de status na página**: `domProgresso`/`domFim` também renderizam
+  `#fbap-status` no feed — progresso do job DOM visível sem abrir o
+  painel (overlay de progresso deles).
+- **`engagepro.due`**: "Agendar engajamento" — salva `filaEngajar`
+  completa + alarme `when`; retomada já existente roda do início.
+- **Expiração do token Graph**: `tokenApiFb` extrai
+  `__accessTokenExpirySecondsRemaining` → `meusGrupos` retorna
+  `expiraEm` (segundos) pro painel logar.
+- **`runId` nos relatórios**: cada rodada gera um id — ações no
+  IndexedDB ficam correlacionadas (mesmo papel do `runId`/`batchN`
+  do lease de créditos deles).
+
+v11 — audit direto na fonte (achados e correções):
+- **Resposta `null` vira "ok"**: `preencherRespostas` deles substitui
+  campos `answer|answer_text|response|text` quando string **ou null**
+  — nosso só cobria string (pergunta vazia ficava sem resposta).
+- **`skipLiked`/`skipCommented` separados**: dedup por post agora é
+  `{like:ts, comentario:ts}` — post curtido antes ainda pode receber
+  comentário depois (antes marcava o post inteiro).
+- **Autor por uid/nome**: `extrairPostsFeed` extrai `autorNome`
+  (owners/actors/author) → `soDiferentes` usa `autorId || autorNome`
+  (deles deduplicam por uid/slug/name).
+- **`joinLote`**: Entrar tem lote como os outros — a cada N entradas
+  (entrou/pendente) pausa 2-6h salvando `filaEntrar` e retoma.
+- **Crédito só em sucesso**: confirmado — `qa()` deles consome crédito
+  só quando outcome é `joined`; nosso cooldown já só roda após
+  entrou/pendente.
+
+v12 — segundo audit na fonte (correções finas):
+
+- **`trocarEmbutido` robusto**: `substituirEmbutido` agora usa
+  fronteira de dígito `(?<!\d)de(?!\d)` só p/ ids numéricos e escapa
+  regex chars em `de` — antes era split/join puro (corrompia ids com
+  prefixo comum, ex. `123` dentro de `123456`).
+- **Erro de rede normalizado** (`We` deles): TypeError/"failed to
+  fetch" no graphql vira `rede_inacessivel (...)` — distinguível de
+  bloqueio no log.
+- **Erro rico completo**: `description`/`description_raw` somam na
+  mensagem; `is_silent`, `path` (`campo=`) e `debug_info` (`dbg=`) nos
+  extras — mesmo nível do `$e` deles.
+- **Join com cadeia completa** (`un` deles): `join_state` primeiro,
+  depois texto — `RE_PERGUNTAS` alargada (`membership_question|
+  admission_question|require.*question|responder.*pergunta`),
+  `RE_JA_MEMBRO` com `MEMBER"`/`already_joined`, nova
+  `RE_JOIN_PENDENTE` (`requested|solicita|CANNOT_JOIN.*approval`),
+  http≠200 → falhou. Ordem anterior testava texto antes do
+  `join_state` (falso "perguntas" possível).
+- **Amizade conservadora** (`Jt` deles): erro GraphQL com texto
+  "already sent" → `ja_amigo`; resposta sem sinal de envio →
+  `falhou` (não assume `enviado` — evita falso positivo e conta
+  retentativa correta). `RE_JA_AMIGO` ganhou `request already`.
+- **Feed sem tombstone** (`Et`/`It` deles): nó com
+  `tombstone|is_hidden|can_viewer_see_content:false|is_deleted|
+  HIDDEN|hidden_story` é pulado — não tenta curtir/comentar post
+  removido. `acharIdAutor` lê `actors[0].id` também (`kt` deles).
+- **Membros sem `__typename`** (`Vt` deles): `edges[].node` com id
+  ≥5 dígitos entra mesmo sem `__typename:"User"`; merge preserva
+  status existente; `mapa.delete(uidAtual)` remove a si mesmo da
+  fila de pedidos.
+- **Cursor amplo** (`en` deles): `definirCursor` casa `cursor|after`
+  em qualquer parte da chave (`end_cursor`, `page_after`), só se o
+  valor for string ou null.
+- **Watchdog de comentário pendente** (`xe` deles): sobe 12 níveis
+  do selo procurando `[role="article"]` (+0.1) e link do próprio uid
+  (+0.2) — selo só conta se for do NOSSO comentário, não de outro.
+- **Seletores DOM**: `commentBtn` ganha `div[role="textbox"]
+  [contenteditable]`; nova lista `commentBox` (variante estrita do
+  composer, consultada primeiro); `blockModal` ganha os ids internos
+  do diálogo de bloqueio (`_r_1oo_`, `_r_ed_`/`_r_ed_v`).
+
+v13 — terceiro audit (uploads, params, busca, DOM):
+
+- **Campos do upload de foto reescritos** (`pt` deles): `subirFoto`
+  renova `fb_dtsg`/`jazoest`/`__user`, gera uuid novo em chaves
+  `RE_IDEMPOTENTE` e troca `sampleUid`→uid embutido nos valores do
+  FormData — antes ia o FormData cru capturado (tokens/uuid velhos).
+  `uploadFotoCapturado` agora grava `sampleUid`.
+- **photoId por JSON-walk em 2 passes** (`m` deles):
+  `photoID|photo_id|photoFbid` primeiro, qualquer `id`≥6 dígitos depois
+  — regex plana podia pegar `id` de outro nó.
+- **Params top-level recebem troca** (`nt` deles): valor de param
+  exatamente igual a um `de` da troca vira `para` (ex. `group_id`
+  fora do `variables`).
+- **`membros` numérico com multiplicador** (`on` deles): "1,2 mil"→1200,
+  "3,4 milhões"→3400000 — antes ia o `[\d.,]+` cru ("1,2"). Grupo
+  também guarda `membrosTexto` pra exibir o original.
+- **Dedup de autor só após sucesso** (`de.add` deles): autor de ação
+  DOM que falhou não queima o "só autores diferentes" — antes era
+  marcado antes de agir.
+- **Pausa no job DOM**: `domPausar` congela o countdown do delay
+  (como PAUSE/RESUME deles); botão Pausar do painel dispara o comando
+  junto do flag local. `ping.dom` reporta `"pausado"`.
+
+v14 — quarto audit (sniffer, overlay, background):
+
+- **Sniffer revisto completo**: `minerarPares` agora cobre os padrões
+  específicos deles — `GroupsCometMembers*` + variantes de rota
+  (admins/experts/contributors/near_you), `queryID` próximo quando
+  não há `doc_id` associado, e extração de objetos JSON/batch com
+  `friendly_name`+`doc_id`+`variables` reais. `minerarDocIds` e
+  `minerarRespostaBnzai` reutilizam (bnzai: param `q`, FormData com
+  blobs → DecompressionStream gzip/deflate/deflate-raw, ASCII 8+
+  como fallback, `__crn` p/ contexto de rota).
+- **Contexto invalidado endurecido** (`Zn` deles): regex
+  `RE_CTX_MORTO` cobre "message port closed"/"Receiving end does not
+  exist"; listeners de `error`/`unhandledrejection` na página também
+  disparam o banner — que ganhou botão **Recarregar**
+  (`sp-reload-prompt` deles).
+- **Agendar Entrar/Aquecer** (`groupwarm.scheduleAlarm`/
+  `profilewarm.scheduleAlarm`): `datetime-local` + botão nos dois
+  cards — `filaEntrar` (com `responderPerguntas`) e `filaAquecer`
+  gravadas + alarme `when`; o boot retoma o tipo certo.
+- **Cota D() com resto**: aquecer divide o limite por grupo como
+  `D()` deles — floor+resto (`[4,3,3]` p/ 10/3) em vez de `Math.ceil`
+  que superalocava.
+- **Listas nomeadas de grupos** (`groupLists` deles): "Salvar lista"
+  no Buscar persiste a seleção com nome em `listasGrupos`; select no
+  Postar insere/exclui.
+- Não portado (fora de escopo): `videoBytes` chunked (coberto por
+  `unlimitedStorage`), `autoconnect.schedule`, orquestração de
+  warmers no service worker (fase SaaS).
+
+v15 — quinto audit (IndexedDB deles, campanhas, cache):
+
+- **`descansoAte` (restUntil deles)**: `rel()` em `bloqueado` e
+  `domFim` `bloqueio_pendente`/`bloqueado` gravam `now+24h`;
+  `gateSessao()` barra qualquer job novo até lá — descanso global do
+  perfil após sinal de moderação.
+- **Campanha recorrente** (`postCampaigns.nextRunAt`): input
+  `postRepetir` (horas) — fila concluída re-arma o alarme com
+  `inicio:0` e repete. Flag viaja na fila salva.
+- **`meusGruposCache` (connectedGroups)**: `entrar()` usa cache de
+  6h dos ids dos meus grupos em vez de chamar a Graph API toda vez.
+- **`buscaRecente` (groupWarmSearches)**: busca e "meus grupos"
+  persistem o resultado; boot restaura a lista de seleção.
+- **`listasPerfis` (engageProfiles)**: listas nomeadas de perfis no
+  card Amizade (Salvar/Inserir/Excluir) — simétrico a `listasGrupos`.
+- **Retry no start de vídeo** (`We`+`Ve`): falha de rede no
+  `/video/upload/requests/start` retenta 1x após 1200ms.
+
+v16 — sexto audit (biblioteca e últimos detalhes):
+
+- **`midias.ativo`** (`engageMedia.active`): toggle ●/○ no Studio
+  desativa mídia sem apagar; drawer do painel só lista ativas.
+- **`midias.pasta`** (`mediaFolders`/`folderId`): campo opcional no
+  Studio agrupa mídias e vira prefixo no detalhe (Studio + drawer).
+- Confirmado: seletores `J` 1:1, `digitarDom`/`colarImagemDom`/
+  Enter-submit, headers/credentials dos requests, `We`/`nn`.
+
+v17 — sétimo audit (protocolo ext-bridge completo):
+
+- **`gruposEntrados`** (`groupwarm.joinedGroupIds`): conjunto
+  persistente de ids já entrados — mescla com `meusGruposCache` e
+  atualiza em `entrou`/`pendente`. Grupo que já teve sucesso nunca
+  retenta, mesmo sem flag de membro na busca nova.
+- **`rascunho`** (`autopost.draft`/`engagepro.settings`): ~40 campos
+  do formulário persistem (debounce 500ms + escritas programáticas)
+  e restauram no boot — fechar o painel não perde a config.
+- Mapeadas todas as ações do protocolo deles: `autopost.*`,
+  `engagepro.*`, `groupwarm.*`, `profilewarm.*`, `warmer.*`,
+  `studio.*`, `autoconnect.*` — o que falta é orquestração no
+  service worker (`*.packet`/`warmer.*`) e perfis conectados do
+  backend (`autoconnect`), ambos escopo SaaS.
+
+v18 — oitavo audit (manifest + service worker):
+
+- **Kill-switch por cookie**: permissão `cookies` + `onChanged`
+  vigiando `c_user` no `background.js` — logout/expiração dispara
+  `sessaoInvalidada` pro painel mesmo sem aba do FB (nosso
+  watchdog era só in-page). `fbPerfilAtivo` persiste o uid ativo.
+- **Limpar dedup** (`clearJoinedIds`/`clearAlarm` deles): botão no
+  rodapé zera `gruposEntrados`, `amizadeTentados`,
+  `interagidosGrupo`, `autores`, `descansoAte` (com confirmação).
+- Manifest comparado: `scripting`/`activeTab`/`optional <all_urls>`
+  deles não são usados por nós; 5 content scripts deles ↔ nossos 2
+  cobrem os mesmos mundos/timings.
 
 **Re-extraído em 23/10/2026**: `pulso-social-src/` = v5.107.0,
 beautified via prettier in-place. Estudo completo abaixo.
@@ -336,17 +642,27 @@ Já implementado no nosso código:
   adsmanager.facebook.com → business.facebook.com → EAA*. `meusGrupos`
   loga a fonte usada.
 
-### Lacunas nossas priorizadas
+### Lacunas nossas priorizadas — todas fechadas em v6
 
 1. ~~Renovar lsd/spin/rev/hsi por request~~ feito
 2. ~~`calibration_text_mismatch`~~ feito (`calibracao_divergente`)
-3. Candidates top-4 por tipo de calibração
-4. Probes ranqueados p/ postId/pending
+3. ~~Candidates top-4 por tipo de calibração~~ feito (leitura tenta moldes)
+4. ~~Probes ranqueados p/ postId/pending~~ feito (adaptativo + persistido)
 5. ~~`me/groups` via token~~ feito + cadeia headless ads/bm
-6. DOM fallback: execCommand+ClipboardEvent (item 11)
+6. ~~DOM fallback: execCommand+ClipboardEvent~~ feito (item 11)
 7. ~~Vídeo/misto/Marketplace moldes~~ feito
-8. IndexedDB p/ biblioteca de mídia + variáveis (pré-SaaS)
-9. Lotes entre LISTAS de grupos (listGap 300-600s) — hoje só groupGap
+8. ~~IndexedDB p/ biblioteca~~ feito (biblioteca.js + studio)
+9. ~~listGap 300-600s entre listas~~ feito (listas separadas por `---`)
+
+Próximas frentes (não são paridade — são evolução): validação real em
+conta descartável, multi-conta, backend SaaS (modelo de créditos deles).
+
+Diferença arquitetural restante: deles, o warmer roda **orquestrado do
+service worker** (`warmer.*` messages) — sobrevive ao painel fechar.
+Nossos jobs moram no sidepanel (morrem se fechar) menos o `engajarDom`
+(mora na página) e as retomadas por alarme. Migrar loops pro background
+é refatoração grande — fazer junto com a fase SaaS, quando o backend
+passar a existir.
 
 ## Roadmap
 
@@ -362,7 +678,8 @@ Já implementado no nosso código:
 9. [x] Vídeo (pipeline start→upload→receive→finalize) e foto+vídeo misto
 10. [x] Marketplace listings (título/preço/xpost) — captura+replay prontos,
         falta validar com anúncio real
-11. [ ] Motor DOM fallback (clicar quando sem calibração GraphQL)
+11. [x] Motor DOM fallback (clicar quando sem calibração GraphQL) —
+        Engajar → "Modo DOM" roda no feed aberto (seletores portados)
 12. [ ] Multi-conta (perfis Chrome separados; depois proxies)
 13. [ ] SaaS: backend de licença/assinatura (modelo do Pulso como referência)
 
