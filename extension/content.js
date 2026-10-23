@@ -8,7 +8,10 @@
     if (!d || d.fonte !== MARCA || d.direcao !== "saida") return;
 
     if (d.tipo === "capturado") {
-      chrome.storage.local.set({ modeloCapturado: d.dados });
+      chrome.storage.local.get("calibracoes", ({ calibracoes = {} }) => {
+        calibracoes[d.dados.tipo] = d.dados;
+        chrome.storage.local.set({ calibracoes });
+      });
       chrome.runtime.sendMessage({ tipo: "capturado", dados: d.dados }).catch(() => {});
       return;
     }
@@ -25,7 +28,7 @@
     const expira = setTimeout(() => {
       pendentes.delete(id);
       responder({ resultado: "erro", erro: "timeout na página" });
-    }, 60000);
+    }, 120000);
     pendentes.set(id, (resultado) => {
       clearTimeout(expira);
       responder(resultado);

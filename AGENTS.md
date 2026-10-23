@@ -34,52 +34,69 @@ SaaS por assinatura com múltiplas contas — o Pulso é a prova de mercado.
   NÃO copiar verbatim — é código proprietário e depende do backend deles
   (`api.pulsosocial.app`, valida `accessToken`/`planName`/`trialStatus`).
 
-## Conhecimento extraído do Pulso Social
+## Conhecimento extraído do Pulso Social (PORTADO pro nosso motor)
 
-- Tokens: `fb_dtsg` e `jazoest` (de `DTSGInitialData`/regex do HTML),
-  `lsd`, `__spin_r/b/t`, `__rev`, `__hsi`, `__user` = cookie `c_user`.
-- Body GraphQL = `URLSearchParams`: `variables` (JSON) + `doc_id` +
-  `fb_api_req_friendly_name` + `fb_api_caller_class=RelayModern` + `__a=1`.
-- Resposta = JSON por linha (só a 1ª linha importa). HTML de volta =
-  checkpoint/WAF → pausar tudo.
-- Códigos de bloqueio conhecidos (api_error_code): `368`, `1357004`,
-  `1404006`, `1404102`, `1390008`.
-- Eles têm sistema de "probes" com score pra parsear respostas (resistência
-  a mudança de formato) e "calibração" que persiste o que funcionou.
-- Módulos deles (nomes de mensagens internas): `AUTO_POST_*`,
-  `GROUP_ENGAGE_*`, `GROUP_SEARCH_*`, `GROUP_PRO_*`, `GROUP_WARM_*`,
-  `PROFILE_WARM_*`, `HOTGROUPS`, `HOTPROFILE`, pedidos de amizade
-  (`CAN_REQUEST`, `INCOMING/OUTGOING_REQUEST`). Storage via Dexie/IndexedDB
-  (`Sender2GroupsDB`).
+Estudado em `pulso-social-src/*.pretty.js` (beautified via prettier).
+Estas técnicas já estão implementadas no nosso `inject.js`:
 
-## Estado atual (MVP)
+- **Tokens**: `fb_dtsg` via `window.require("DTSGInitialData").token` →
+  fallback input/regex. `jazoest = "2" + soma dos charCodes do dtsg`.
+- **Replay** (função `Rt` deles → `montarRequisicao`): troca `sampleUid`→uid
+  atual; `et()` substituição profunda regenerando UUIDs de chaves
+  idempotentes (`idempotence|session_id|tracking|client_mutation_id|nonce`);
+  `tt()` renova `composer_session`; substituição `embedded` =
+  `JSON.stringify→split(de).join(para)→parse` pra IDs embutidos em strings;
+  `wt()` zera `cursor`/`after` pra paginação.
+- **Texto do post**: `message.text` (`He`) + `composed_text` em blocos
+  Draft.js (`Ze` — blocks/block_data/entities/entity_map).
+- **Like**: `feedback_reaction_id:"0"` no template → trocar por
+  `"1635855486666999"` (ID da reação like, hardcoded deles).
+- **Busca**: regenera `args.context.bsid` (UUID de sessão de busca) por
+  consulta; pagina até 15-90 páginas com `end_cursor`.
+- **Join**: resposta classificada por `join_state` (MEMBER/JOINED/ACTIVE =
+  entrou; REQUESTED/PENDING = pendente); grupos com perguntas → eles
+  respondem "ok" em todos os campos answer/text.
+- **Upload de foto**: captura FormData com imagem → `{url, fields,
+  fileField}`; replay reescreve feedback_id/av/__user/fb_dtsg/jazoest na
+  URL e extrai `photoID` da resposta.
+- **Detecção bilíngue de bloqueio** no TEXTO da resposta (além do JSON):
+  "temporarily blocked", "limitamos a frequência", "tente novamente mais
+  tarde". Pendente: `pending_review|awaiting_approval|será analisad|...`.
+- **`window.__spPosting`** deles → nosso `window.__fbPostando`: impede
+  recapturar os próprios replays.
+- Taxonomia de captura (regexes dos friendlyNames) portada: composer,
+  feed, CreateComment, ReactMutation, GroupJoin, SearchResults, friend.
 
-`extension/` — postagem em grupos funciona assim:
+## Estado atual
 
-- `inject.js` (MAIN world, document_start): hooks em fetch+XHR → captura
-  template do composer → extrai tokens → resolve slug→ID de grupo → replay.
-- `content.js` (isolated): ponte postMessage ↔ chrome.runtime.
-  Protocolo interno: `{fonte:"fb-autopost", direcao, tipo, dados}`,
-  ações `postar`/`resolver`/`ping`, resultados `ok`/`erro`/`bloqueado`.
-- `sidepanel.html/js`: UI (lista de grupos, mensagem, delay min/max,
-  start/stop, log). Abre ao clicar no ícone.
-- Anti-bloqueio MVP: resposta não-JSON ou error_code de restrição → para fila.
+`extension/` — motor completo portado (v2):
 
-**Pendente de validação**: os heurísticos `textPaths`/`groupPaths` podem
-precisar de ajuste na 1ª calibração real — a estrutura de `variables` varia
-entre as mutations de composer do FB. Ver log do painel ao testar.
+- `inject.js` (~840 linhas): sniffer multi-tipo + engine de replay.
+  Calibrações: `post`, `postFoto`, `comentario`, `comentarioFoto`,
+  `like`, `entrar`, `busca`, `feed`, `amigo`.
+  Ações via ponte: `postar`, `resolver`, `curtir`, `comentar`,
+  `entrar`, `buscar`, `feed`, `ping`.
+- `content.js`: ponte + persiste `calibracoes` por tipo no storage.
+- `sidepanel.*`: 3 módulos UI — Postar (com foto), Buscar+Entrar
+  (resultados clicáveis → lista), Engajar (feed→like+comentário com
+  spintax `{a|b}`).
+
+**Pendente de validação real**: heurísticas de extração de `variables`
+podem precisar ajuste fino (estruturas variam entre mutations do FB).
 
 ## Roadmap
 
 1. [ ] Validar post em grupos com calibração real (conta descartável existe)
-2. [ ] **Upload de imagem nos posts** (essencial — anúncio sem imagem não
-       performa; o Pulso tem `photo upload`/`upload_url` pra estudar)
-3. [ ] Comentários em massa (mesma técnica, outra mutation)
-4. [ ] Curtidas/reações automáticas
-5. [ ] Busca de grupos por palavra-chave + pedido de entrada
-6. [ ] Aquecedor de perfil (navegação simulada)
-7. [ ] Multi-conta (perfis Chrome separados; depois proxies)
-8. [ ] SaaS: backend de licença/assinatura (modelo do Pulso como referência)
+2. [x] Upload de imagem nos posts e comentários (motor pronto — precisa de
+       calibração real postando/comentando com foto 1x)
+3. [x] Comentários em massa (módulo Engajar: feed→comentar)
+4. [x] Curtidas/reações automáticas (módulo Engajar: feed→curtir)
+5. [x] Busca de grupos por palavra-chave + pedido de entrada (UI pronta)
+6. [ ] Responder perguntas de grupo automaticamente ("ok" em todos campos)
+7. [ ] Pedidos de amizade em massa (calibração `amigo` já captura)
+8. [ ] Aquecedor de perfil (navegação simulada)
+9. [ ] Multi-conta (perfis Chrome separados; depois proxies)
+10. [ ] SaaS: backend de licença/assinatura (modelo do Pulso como referência)
 
 ## Como testar
 

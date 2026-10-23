@@ -6,71 +6,117 @@
   * { box-sizing: border-box; margin: 0; }
   body { font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
          background: #0f1115; color: #e5e7eb; padding: 14px; }
-  h1 { font-size: 15px; margin-bottom: 12px; color: #60a5fa; }
+  h1 { font-size: 15px; margin-bottom: 10px; color: #60a5fa; }
+  h2 { font-size: 12px; color: #9ca3af; margin-bottom: 8px;
+       text-transform: uppercase; letter-spacing: .5px; }
   section { background: #161a22; border: 1px solid #262c3a; border-radius: 8px;
             padding: 10px 12px; margin-bottom: 12px; }
-  label { display: block; font-size: 11px; color: #9ca3af; margin-bottom: 4px;
-          text-transform: uppercase; letter-spacing: .5px; }
-  textarea, input { width: 100%; background: #0d1017; color: #e5e7eb;
+  label { display: block; font-size: 11px; color: #9ca3af; margin-bottom: 4px; }
+  textarea, input[type=text], input[type=number], input[type=file] {
+      width: 100%; background: #0d1017; color: #e5e7eb;
       border: 1px solid #2d3442; border-radius: 6px; padding: 8px;
-      font: inherit; resize: vertical; }
+      font: inherit; resize: vertical; margin-bottom: 8px; }
   textarea:focus, input:focus { outline: none; border-color: #3b82f6; }
   .row { display: flex; gap: 8px; }
   .row > div { flex: 1; }
   button { width: 100%; padding: 9px; border: 0; border-radius: 6px;
-           font: inherit; font-weight: 600; cursor: pointer; }
-  #start { background: #2563eb; color: #fff; }
-  #start:hover { background: #1d4ed8; }
-  #stop { background: #374151; color: #e5e7eb; margin-top: 6px; display: none; }
-  #stop:hover { background: #4b5563; }
+           font: inherit; font-weight: 600; cursor: pointer;
+           background: #2563eb; color: #fff; }
+  button:hover { background: #1d4ed8; }
+  button.sec { background: #374151; }
+  button.sec:hover { background: #4b5563; }
   button:disabled { opacity: .45; cursor: not-allowed; }
-  .calib { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .dot.ok { background: #22c55e; } .dot.no { background: #f59e0b; }
-  .hint { color: #9ca3af; font-size: 11px; margin-top: 4px; }
+  .calib { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+          background: #0d1017; border: 1px solid #2d3442; border-radius: 12px;
+          padding: 3px 9px; color: #9ca3af; }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #4b5563; }
+  .chip.ok { color: #e5e7eb; border-color: #166534; }
+  .chip.ok .dot { background: #22c55e; }
+  .hint { color: #6b7280; font-size: 11px; margin-top: 4px; }
+  .check { display: flex; align-items: center; gap: 6px; font-size: 12px;
+           margin-bottom: 6px; }
+  .check input { width: auto; margin: 0; }
   #log { background: #0a0c10; border: 1px solid #262c3a; border-radius: 6px;
-         height: 180px; overflow-y: auto; padding: 8px; font-family: Consolas,
+         height: 170px; overflow-y: auto; padding: 8px; font-family: Consolas,
          monospace; font-size: 11px; white-space: pre-wrap; }
   .l-ok { color: #4ade80; } .l-err { color: #f87171; }
   .l-warn { color: #fbbf24; } .l-info { color: #93c5fd; }
-  #progress { color: #9ca3af; font-size: 11px; text-align: center; margin-top: 6px; }
+  #progresso { color: #9ca3af; font-size: 11px; text-align: center; margin: 6px 0; }
+  .grupo-item { display: flex; align-items: center; gap: 6px; padding: 4px 0;
+                border-bottom: 1px solid #1f2430; font-size: 12px; }
+  .grupo-item span { flex: 1; overflow: hidden; text-overflow: ellipsis;
+                     white-space: nowrap; }
+  .grupo-item small { color: #6b7280; flex: none; }
+  #resultados { max-height: 160px; overflow-y: auto; margin-bottom: 8px; }
+  details { margin-bottom: 12px; }
+  summary { cursor: pointer; font-size: 12px; color: #9ca3af;
+            text-transform: uppercase; letter-spacing: .5px; padding: 4px 0; }
 </style>
 </head>
 <body>
 <h1>FB AutoPost</h1>
 
 <section>
-  <div class="calib">
-    <span class="dot no" id="calibDot"></span>
-    <span id="calibText">Sem calibração</span>
-  </div>
-  <div class="hint">Poste manualmente num grupo do Facebook uma vez — a extensão aprende o formato da requisição sozinha.</div>
+  <h2>Calibrações</h2>
+  <div class="calib" id="calibs"></div>
+  <div class="hint">A extensão aprende observando você usar o Facebook:
+    poste/comente/curta/entre/busque manualmente uma vez.</div>
 </section>
+
+<details open>
+  <summary>Postar em grupos</summary>
+  <section>
+    <label>Grupos (URL ou slug — um por linha)</label>
+    <textarea id="grupos" rows="4" placeholder="https://www.facebook.com/groups/123456"></textarea>
+    <label>Mensagem</label>
+    <textarea id="mensagem" rows="3" placeholder="Texto da publicação..."></textarea>
+    <label>Foto (opcional — precisa ter postado com foto 1x)</label>
+    <input type="file" id="foto" accept="image/*">
+    <div class="row">
+      <div><label>Delay mín (s)</label><input id="dmin" type="number" value="60" min="5"></div>
+      <div><label>Delay máx (s)</label><input id="dmax" type="number" value="180" min="5"></div>
+    </div>
+    <button id="btnPostar">Iniciar postagens</button>
+  </section>
+</details>
+
+<details>
+  <summary>Buscar e entrar em grupos</summary>
+  <section>
+    <label>Termo de busca</label>
+    <input type="text" id="termo" placeholder="ex: marmita fit">
+    <button class="sec" id="btnBuscar">Buscar grupos</button>
+    <div id="resultados" style="margin-top:8px"></div>
+    <div class="row">
+      <button class="sec" id="btnAddLista">Selecionados → lista</button>
+      <button id="btnEntrar">Entrar nos selecionados</button>
+    </div>
+  </section>
+</details>
+
+<details>
+  <summary>Engajar num grupo (curtir + comentar)</summary>
+  <section>
+    <label>URL/slug do grupo</label>
+    <input type="text" id="engGrupo" placeholder="https://www.facebook.com/groups/123456">
+    <div class="row">
+      <div><label>Qtd posts</label><input id="engLimite" type="number" value="10" min="1" max="50"></div>
+      <div><label>Delay (s)</label><input id="engDelay" type="number" value="30" min="5"></div>
+    </div>
+    <div class="check"><input type="checkbox" id="engLike" checked><span>Curtir posts</span></div>
+    <div class="check"><input type="checkbox" id="engComentar"><span>Comentar posts</span></div>
+    <label>Comentários (um por linha, gira — use {a|b} pra variar)</label>
+    <textarea id="engTextos" rows="3" placeholder="Top! {Parabéns|Show|Ótimo}"></textarea>
+    <button id="btnEngajar">Engajar</button>
+  </section>
+</details>
+
+<button class="sec" id="btnParar" style="display:none">Parar tudo</button>
+<div id="progresso"></div>
 
 <section>
-  <label>Grupos (URL ou slug — um por linha)</label>
-  <textarea id="groups" rows="5" placeholder="https://www.facebook.com/groups/123456&#10;meugrupo.exemplo"></textarea>
-</section>
-
-<section>
-  <label>Mensagem</label>
-  <textarea id="message" rows="4" placeholder="Texto da publicação..."></textarea>
-</section>
-
-<section>
-  <div class="row">
-    <div><label>Delay mín (s)</label><input id="dmin" type="number" value="60" min="5"></div>
-    <div><label>Delay máx (s)</label><input id="dmax" type="number" value="180" min="5"></div>
-  </div>
-  <div class="hint">Intervalo aleatório entre postagens — imita comportamento humano.</div>
-</section>
-
-<button id="start">Iniciar postagens</button>
-<button id="stop">Parar</button>
-<div id="progress"></div>
-
-<section style="margin-top:12px">
-  <label>Log</label>
+  <h2>Log</h2>
   <div id="log"></div>
 </section>
 
