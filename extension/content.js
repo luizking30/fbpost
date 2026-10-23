@@ -21,6 +21,11 @@
       return;
     }
 
+    if (d.tipo === "sessaoInvalidada") {
+      chrome.runtime.sendMessage({ tipo: "sessaoInvalidada", dados: d.dados }).catch(() => {});
+      return;
+    }
+
     if (d.tipo === "resposta" && pendentes.has(d.dados.id)) {
       pendentes.get(d.dados.id)(d.dados.resultado);
       pendentes.delete(d.dados.id);

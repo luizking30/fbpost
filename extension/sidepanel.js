@@ -3,8 +3,18 @@ const logEl = $("log");
 let rodando = false, parar = false;
 let gruposEncontrados = [];
 
+// ---------- abas ----------
+for (const t of document.querySelectorAll(".tab"))
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("ativo"));
+    document.querySelectorAll(".pane").forEach((x) => x.classList.remove("ativo"));
+    t.classList.add("ativo");
+    $("tab-" + t.dataset.tab)?.classList.add("ativo");
+  });
+
 const TIPOS = {
-  post: "Post", postFoto: "Post+foto", comentario: "Comentário",
+  post: "Post", postFoto: "Post+foto", postVideo: "Post+vídeo",
+  postMisto: "Post misto", listing: "Marketplace", comentario: "Comentário",
   comentarioFoto: "Coment+foto", like: "Like", entrar: "Entrar",
   busca: "Busca", feed: "Feed", membros: "Membros", amigo: "Amizade",
   membros_admins: "Admins", membros_experts: "Experts",
@@ -41,8 +51,36 @@ async function comando(acao, dados) {
   return chrome.tabs.sendMessage(aba.id, { tipo: "comando", acao, dados });
 }
 
+// ---------- dot de sessão no topo ----------
+async function checarSessao() {
+  const dot = $("sessaoDot");
+  if (!dot) return;
+  try {
+    const p = await comando("ping");
+    dot.className = "dot" + (p?.sessao ? " ok" : " warn");
+    dot.title = p?.sessao ? "Sessão ativa no Facebook" : "Sem sessão — faça login";
+  } catch {
+    dot.className = "dot warn";
+    dot.title = "Sem aba do Facebook aberta";
+  }
+}
+checarSessao();
+setInterval(checarSessao, 30000);
+
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 const aleatorio = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
+
+// delay com progresso a cada ~250ms e interrompível (portado deles)
+async function esperar(totalSeg, prefixo = "") {
+  const totalMs = totalSeg * 1000;
+  const inicio = Date.now();
+  while (Date.now() - inicio < totalMs && !parar) {
+    const restante = Math.ceil((totalMs - (Date.now() - inicio)) / 1000);
+    $("progresso").textContent = `${prefixo}aguardando ${restante}/${totalSeg}s`;
+    await dormir(Math.min(250, totalMs - (Date.now() - inicio)));
+  }
+  return !parar;
+}
 
 // spintax: {a|b} inline + {{nome}} com listas nomeadas (giro persistente)
 const contadoresSpin = new Map();
@@ -86,7 +124,7 @@ const resolver = async (bruto) => {
 function controle(estado) {
   rodando = estado;
   parar = false;
-  for (const b of ["btnPostar", "btnEngajar", "btnEntrar", "btnAmizade", "btnAquecer"])
+  for (const b of ["btnPostar", "btnEngajar", "btnEntrar", "btnAmizade", "btnAquecer", "btnListing"])
     $(b).disabled = estado;
   $("btnParar").style.display = estado ? "block" : "none";
   if (!estado) $("progresso").textContent = "";
@@ -103,21 +141,42 @@ async function postar(estadoInicial) {
   const inicio = estadoInicial?.inicio ?? 0;
   const dmin = Math.max(5, +$("dmin").value || 60);
   const dmax = Math.max(dmin, +$("dmax").value || 180);
-  const foto = $("foto").files[0];
+  const fotos = [...$("foto").files];
+  const videos = [...$("video").files];
 
   if (!grupos.length) return registrar("Lista de grupos vazia", "l-err");
-  if (!mensagens.length && !foto && !estadoInicial?.fotoDataUrl)
+  if (!mensagens.length && !fotos.length && !videos.length &&
+      !estadoInicial?.fotos?.length && !estadoInicial?.videos?.length)
     return registrar("Mensagem vazia", "l-err");
 
-  let fotoDataUrl = estadoInicial?.fotoDataUrl;
-  if (foto && !fotoDataUrl) {
-    fotoDataUrl = await new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(r.result);
-      r.onerror = rej;
-      r.readAsDataURL(foto);
-    });
-  }
+  const paraDataUrl = (arquivo) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(arquivo);
+  });
+
+  // mediaList (portado): variações {texto, foto, video} giradas por grupo
+  const fotosUrl = estadoInicial?.fotos ??
+    await Promise.all(fotos.map(paraDataUrl));
+  const videosUrl = estadoInicial?.videos ??
+    await Promise.all(videos.map(async (v) => {
+      if (v.size > 30 * 1024 * 1024)
+        throw new Error(`Vídeo ${v.name} muito grande (máx ~30MB)`);
+      return paraDataUrl(v);
+    }));
+
+  // monta entradas de mídia: zíper das 3 listas (modo them: 1 item = texto+mídia)
+  const nEntradas = Math.max(mensagens.length, fotosUrl.length, videosUrl.length);
+  const mediaList = Array.from({ length: nEntradas }, (_, i) => ({
+    texto: mensagens.length ? mensagens[i % mensagens.length] : "",
+    foto: fotosUrl.length ? fotosUrl[i % fotosUrl.length] : null,
+    video: videosUrl.length ? videosUrl[i % videosUrl.length] : null,
+  }));
+  const pegarMidia = (i) =>
+    modo === "aleatorio"
+      ? mediaList[Math.floor(Math.random() * mediaList.length)]
+      : mediaList[i % mediaList.length];
 
   controle(true);
   try {
@@ -140,25 +199,24 @@ async function postar(estadoInicial) {
       if (parar) { registrar("Interrompido", "l-warn"); break; }
       const g = grupos[i];
       $("progresso").textContent = `${i + 1}/${grupos.length} — ${g}`;
-      const msg = mensagens.length
-        ? aplicarSpintax(
-            modo === "aleatorio"
-              ? mensagens[Math.floor(Math.random() * mensagens.length)]
-              : mensagens[i % mensagens.length],
-            vars)
-        : "";
+      const m = pegarMidia(i);
+      const msg = m.texto ? aplicarSpintax(m.texto, vars) : "";
       try {
         if (!cache[g]) cache[g] = await resolver(g);
         const res = await comando("postar", {
-          idGrupo: cache[g], texto: msg, fotoDataUrl,
+          idGrupo: cache[g], texto: msg,
+          fotoDataUrl: m.foto, videoDataUrl: m.video,
         });
         feitos = i + 1;
         if (res.resultado === "ok") {
           algumSucesso = true; repetidos = 0; ultimoCodigo = "";
           registrar(`${g}: ${res.situacao || "publicado"}${res.postId ? " (id " + res.postId + ")" : ""}`, "l-ok");
+          // delay só após sucesso (como eles — cooldown não roda em falha)
+          if (i < fim - 1 && !parar)
+            await esperar(aleatorio(dmin, dmax), `${i + 1}/${grupos.length} — `);
         } else if (res.resultado === "bloqueado") {
           registrar(`${g}: BLOQUEIO — ${res.erro}. Parando tudo.`, "l-err");
-          await salvarFila({ grupos, mensagens, vars, modo, limiteRodada, inicio: feitos, fotoDataUrl });
+          await salvarFila({ grupos, mensagens, vars, modo, limiteRodada, inicio: feitos, fotos: fotosUrl, videos: videosUrl });
           break;
         } else {
           registrar(`${g}: erro — ${res.erro}`, "l-warn");
@@ -173,11 +231,6 @@ async function postar(estadoInicial) {
       } catch (e) {
         registrar(`${g}: ${e.message}`, "l-warn");
       }
-      if (i < fim - 1 && !parar) {
-        const espera = aleatorio(dmin, dmax);
-        $("progresso").textContent = `${i + 1}/${grupos.length} — aguardando ${espera}s`;
-        for (let s = 0; s < espera && !parar; s++) await dormir(1000);
-      }
     }
 
     // pacote: sobrou fila → agenda retomada
@@ -185,7 +238,7 @@ async function postar(estadoInicial) {
       const rMin = Math.max(0, +$("retMin").value || 2);
       const rMax = Math.max(rMin, +$("retMax").value || 6);
       const horas = rMin + Math.random() * (rMax - rMin);
-      await salvarFila({ grupos, mensagens, vars, modo, limiteRodada, inicio: feitos, fotoDataUrl });
+      await salvarFila({ grupos, mensagens, vars, modo, limiteRodada, inicio: feitos, fotos: fotosUrl, videos: videosUrl });
       await chrome.alarms.create("retomar_fila", { delayInMinutes: horas * 60 });
       registrar(`PACOTE: ${feitos}/${grupos.length} feitos — retomando em ~${horas.toFixed(1)}h`, "l-warn");
     } else {
@@ -213,11 +266,21 @@ async function buscar() {
     if (res.resultado !== "ok")
       return registrar(res.erro || "busca falhou", "l-err");
     gruposEncontrados = res.grupos;
+    const badge = (g) => [
+      g.membros && `${g.membros} membros`,
+      g.postsDia,
+      g.privacidade,
+      g.perguntas && "perguntas",
+      g.amigosComum,
+      ["MEMBER", "JOINED", "ACTIVE"].includes(g.estado) && "membro",
+      ["REQUESTED", "AWAITING_APPROVAL", "PENDING"].includes(g.estado) && "pendente",
+    ].filter(Boolean).join(" · ");
     $("resultados").innerHTML = res.grupos
       .map(
-        (g, i) => `<div class="grupo-item">
-          <input type="checkbox" data-gid="${g.id}" data-gnome="${g.nome}" checked>
-          <span>${g.nome}</span><small>${g.membros || ""}</small></div>`
+        (g) => `<div class="grupo-item">
+          <input type="checkbox" data-gid="${g.id}" data-gnome="${g.nome}"
+                 data-estado="${g.estado || ""}" checked>
+          <span>${g.nome}</span><small>${badge(g)}</small></div>`
       )
       .join("");
     registrar(`${res.grupos.length} grupos encontrados`, "l-ok");
@@ -232,6 +295,7 @@ function selecionados() {
   return [...$("resultados").querySelectorAll("input:checked")].map((c) => ({
     id: c.dataset.gid,
     nome: c.dataset.gnome,
+    estado: c.dataset.estado || "",
   }));
 }
 
@@ -244,6 +308,15 @@ async function entrar() {
     for (let i = 0; i < lista.length; i++) {
       if (parar) { registrar("Interrompido", "l-warn"); break; }
       const g = lista[i];
+      // já é membro/pedido pendente segundo a busca — pula sem gastar request
+      if (["MEMBER", "JOINED", "ACTIVE"].includes(g.estado || "")) {
+        registrar(`${g.nome}: já é membro — pulando`, "l-info");
+        continue;
+      }
+      if (["REQUESTED", "AWAITING_APPROVAL", "PENDING"].includes(g.estado || "")) {
+        registrar(`${g.nome}: pedido já pendente — pulando`, "l-info");
+        continue;
+      }
       $("progresso").textContent = `Entrando ${i + 1}/${lista.length} — ${g.nome}`;
       const res = await comando("entrar", { idGrupo: g.id, responderPerguntas: $("joinPerguntas").checked });
       if (res.resultado === "entrou") registrar(`${g.nome}: entrou`, "l-ok");
@@ -253,8 +326,14 @@ async function entrar() {
       else if (res.resultado === "bloqueado") {
         registrar(`${g.nome}: BLOQUEIO — ${res.erro}. Parando.`, "l-err");
         break;
-      } else registrar(`${g.nome}: ${res.erro || "falhou"}`, "l-warn");
-      if (i < lista.length - 1 && !parar) await dormir(aleatorio(20, 60) * 1000);
+      } else {
+        registrar(`${g.nome}: ${res.erro || "falhou"}`, "l-warn");
+        continue;
+      }
+      // cooldown só após entrou/pendente — falha/skip não gasta (como eles)
+      if (["entrou", "pendente"].includes(res.resultado) &&
+          i < lista.length - 1 && !parar)
+        await esperar(aleatorio(30, 90));
     }
   } catch (e) {
     registrar(e.message, "l-err");
@@ -263,80 +342,125 @@ async function entrar() {
   }
 }
 
-// ---------- engajar ----------
+// ---------- engajar (portado: GROUP_PRO — multi-grupo, gaps, commentMode) ----------
 async function engajar() {
-  const grupo = $("engGrupo").value.trim();
+  const grupos = $("engGrupo").value.split("\n").map((s) => s.trim()).filter(Boolean);
   const limite = Math.max(1, +$("engLimite").value || 10);
-  const delay = Math.max(5, +$("engDelay").value || 30);
+  const dmin = Math.max(5, +$("engDelayMin").value || 60);
+  const dmax = Math.max(dmin, +$("engDelayMax").value || 120);
+  const gapMin = Math.max(5, +$("engGapMin").value || 120);
+  const gapMax = Math.max(gapMin, +$("engGapMax").value || 240);
   const querLike = $("engLike").checked;
   const querComentario = $("engComentar").checked;
   const soDiferentes = $("engSoDiferentes").checked;
   const dedup = $("engDedup").checked;
+  const modo = $("engModo").value; // texto | imagem | ambos | aleatorio
   const textos = $("engTextos").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const foto = $("engFoto").files[0];
   const vars = lerVars();
-  const { interagidos = {}, autores = {} } = await chrome.storage.local.get(["interagidos", "autores"]);
+  // dedup persistido POR grupo (portado: interactedByGroup)
+  const { interagidosGrupo = {}, autores = {} } =
+    await chrome.storage.local.get(["interagidosGrupo", "autores"]);
 
-  if (!grupo) return registrar("Informe o grupo", "l-err");
+  if (!grupos.length) return registrar("Informe ao menos um grupo", "l-err");
   if (!querLike && !querComentario) return registrar("Marque curtir e/ou comentar", "l-err");
-  if (querComentario && !textos.length) return registrar("Sem textos de comentário", "l-err");
+  const querFoto = ["imagem", "ambos", "aleatorio"].includes(modo) && foto;
+  const querTexto = ["texto", "ambos", "aleatorio"].includes(modo) || (modo === "imagem" && !foto);
+  if (querComentario && querTexto && !textos.length)
+    return registrar("Sem textos de comentário", "l-err");
+  if (querComentario && ["imagem", "ambos"].includes(modo) && !foto)
+    return registrar("Modo com imagem precisa de uma foto de comentário", "l-err");
+
+  let fotoComentario = null;
+  if (foto) {
+    const r = new FileReader();
+    fotoComentario = await new Promise((res, rej) => {
+      r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(foto);
+    });
+  }
 
   controle(true);
   try {
-    const gid = await resolver(grupo);
-    registrar(`Grupo ${gid} — engajando até ${limite} posts`);
-    let feitos = 0, cursor, paginas = 0, idxTexto = 0;
-    outer: while (feitos < limite && paginas < 10) {
+    for (let gidx = 0; gidx < grupos.length; gidx++) {
       if (parar) { registrar("Interrompido", "l-warn"); break; }
-      paginas++;
-      const feed = await comando("feed", { idGrupo: gid, cursor });
-      if (feed.resultado === "bloqueado") {
-        registrar(`BLOQUEIO no feed — ${feed.erro}`, "l-err");
-        break;
-      }
-      if (feed.resultado !== "ok") {
-        registrar(feed.erro || "feed falhou", "l-err");
-        break;
-      }
-      if (!feed.posts.length) { registrar("Feed vazio", "l-warn"); break; }
-      cursor = feed.cursor;
-      for (const p of feed.posts) {
-        if (parar) break outer;
-        if (feitos >= limite) break outer;
-        if (dedup && interagidos[p.feedbackId]) continue;
-        if (soDiferentes && p.autorId && autores[p.autorId]) continue;
-        $("progresso").textContent = `Post ${feitos + 1}/${limite}`;
-        if (querLike) {
-          const r = await comando("curtir", { feedbackId: p.feedbackId });
-          if (r.resultado === "bloqueado") {
-            registrar(`BLOQUEIO no like — ${r.erro}. Parando.`, "l-err");
-            break outer;
-          }
-          if (r.resultado === "ok") {
-            interagidos[p.feedbackId] = Date.now();
-            registrar(`like em ${p.feedbackId.slice(0, 18)}…`, "l-ok");
-          } else registrar(`like falhou: ${r.erro}`, "l-warn");
-          await dormir(aleatorio(3, 8) * 1000);
+      const gid = await resolver(grupos[gidx]);
+      registrar(`Grupo ${gidx + 1}/${grupos.length} (${gid}) — engajando até ${limite} posts`);
+      interagidosGrupo[gid] = interagidosGrupo[gid] || {};
+      const interagidos = interagidosGrupo[gid];
+      let feitos = 0, cursor, paginas = 0, vazias = 0, idxTexto = 0;
+      const maxPaginas = Math.max(60, limite * 4); // teto de varredura (como eles)
+      outer: while (feitos < limite && paginas < maxPaginas) {
+        if (parar) { registrar("Interrompido", "l-warn"); break; }
+        paginas++;
+        const feed = await comando("feed", { idGrupo: gid, cursor });
+        if (feed.resultado === "bloqueado") {
+          registrar(`BLOQUEIO no feed — ${feed.erro}`, "l-err");
+          return;
         }
-        if (querComentario) {
-          const texto = aplicarSpintax(textos[idxTexto++ % textos.length], vars);
-          const r = await comando("comentar", { feedbackId: p.feedbackId, texto });
-          if (r.resultado === "bloqueado") {
-            registrar(`BLOQUEIO no comentário — ${r.erro}. Parando.`, "l-err");
-            break outer;
-          }
-          if (r.resultado === "ok") {
-            interagidos[p.feedbackId] = Date.now();
-            registrar(`comentou (${r.situacao}) em ${p.feedbackId.slice(0, 18)}…`, "l-ok");
-          } else registrar(`comentário falhou: ${r.erro}`, "l-warn");
+        if (feed.resultado !== "ok") {
+          registrar(feed.erro || "feed falhou", "l-err");
+          break;
         }
-        if (soDiferentes && p.autorId) autores[p.autorId] = Date.now();
-        feitos++;
-        await chrome.storage.local.set({ interagidos, autores });
-        await dormir(delay * 1000);
+        if (!feed.posts.length) {
+          if (++vazias >= 2) { registrar("Feed esgotado", "l-info"); break; }
+          cursor = feed.cursor;
+          continue;
+        }
+        vazias = 0;
+        cursor = feed.cursor;
+        for (const p of feed.posts) {
+          if (parar) break outer;
+          if (feitos >= limite) break outer;
+          if (dedup && interagidos[p.feedbackId]) continue;
+          if (soDiferentes && p.autorId && autores[p.autorId]) continue;
+          $("progresso").textContent = `Post ${feitos + 1}/${limite}`;
+          let agiu = false;
+          if (querLike) {
+            const r = await comando("curtir", { feedbackId: p.feedbackId });
+            if (r.resultado === "bloqueado") {
+              registrar(`BLOQUEIO no like — ${r.erro}. Parando.`, "l-err");
+              return;
+            }
+            if (r.resultado === "ok") {
+              agiu = true;
+              registrar(`like em ${p.feedbackId.slice(0, 18)}…`, "l-ok");
+            } else registrar(`like falhou: ${r.erro}`, "l-warn");
+            await esperar(aleatorio(3, 8));
+          }
+          if (querComentario && !parar) {
+            // commentMode: text | image | both | aleatorio (portado deles)
+            const usarFoto = modo === "imagem" || modo === "ambos" ||
+              (modo === "aleatorio" && fotoComentario && Math.random() < 0.5);
+            const usarTexto = modo === "texto" || modo === "ambos" ||
+              (modo === "aleatorio" && !usarFoto) || (usarFoto && !fotoComentario);
+            const r = await comando("comentar", {
+              feedbackId: p.feedbackId,
+              texto: usarTexto ? aplicarSpintax(textos[idxTexto++ % textos.length], vars) : null,
+              fotoDataUrl: usarFoto ? fotoComentario : null,
+            });
+            if (r.resultado === "bloqueado") {
+              registrar(`BLOQUEIO no comentário — ${r.erro}. Parando.`, "l-err");
+              return;
+            }
+            if (r.resultado === "ok") {
+              agiu = true;
+              registrar(`comentou (${r.situacao}${usarFoto ? ", foto" : ""}) em ${p.feedbackId.slice(0, 18)}…`, "l-ok");
+            } else registrar(`comentário falhou: ${r.erro}`, "l-warn");
+          }
+          if (agiu) interagidos[p.feedbackId] = Date.now();
+          if (soDiferentes && p.autorId) autores[p.autorId] = Date.now();
+          feitos++;
+          await chrome.storage.local.set({ interagidosGrupo, autores });
+          if (!parar) await esperar(aleatorio(dmin, dmax));
+        }
+        if (!cursor) break;
       }
-      if (!cursor) break;
+      registrar(`Grupo ${gid}: ${feitos} posts engajados`, "l-ok");
+      // gap entre grupos da mesma lista (portado: groupDelay 120-240s)
+      if (gidx < grupos.length - 1 && !parar)
+        await esperar(aleatorio(gapMin, gapMax), `próximo grupo em `);
     }
-    registrar(`Engajamento concluído: ${feitos} posts`, "l-ok");
+    registrar("Engajamento concluído", "l-ok");
   } catch (e) {
     registrar(e.message, "l-err");
   } finally {
@@ -360,8 +484,12 @@ async function amizade() {
         const r = await comando("perfil", { bruto: p });
         if (r.erro) throw new Error(r.erro);
         const res = await comando("amizade", { idUsuario: r.idUsuario });
-        if (res.resultado === "enviado") registrar(`${p}: pedido enviado`, "l-ok");
-        else if (res.resultado === "ja_amigo") registrar(`${p}: já é amigo/pendente`, "l-info");
+        if (res.resultado === "enviado") {
+          registrar(`${p}: pedido enviado`, "l-ok");
+          // cooldown só após pedido efetivado (como eles)
+          if (i < perfis.length - 1 && !parar)
+            await esperar(aleatorio(dmin, dmax));
+        } else if (res.resultado === "ja_amigo") registrar(`${p}: já é amigo/pendente`, "l-info");
         else if (res.resultado === "bloqueado") {
           registrar(`${p}: BLOQUEIO — ${res.erro}. Parando.`, "l-err");
           break;
@@ -369,8 +497,6 @@ async function amizade() {
       } catch (e) {
         registrar(`${p}: ${e.message}`, "l-warn");
       }
-      if (i < perfis.length - 1 && !parar)
-        await dormir(aleatorio(dmin, dmax) * 1000);
     }
   } catch (e) {
     registrar(e.message, "l-err");
@@ -412,6 +538,7 @@ async function aquecer() {
         if (r.resultado === "enviado") {
           enviados++;
           registrar(`pedido → ${u.nome || u.id}`, "l-ok");
+          await esperar(delay); // cooldown só após warmed (como eles)
         } else if (r.resultado === "ja_amigo") {
           jaAmigos++;
           registrar(`${u.nome || u.id}: já é amigo`, "l-info");
@@ -419,7 +546,6 @@ async function aquecer() {
           registrar(`BLOQUEIO — ${r.erro}. Parando.`, "l-err");
           break outer;
         } else registrar(`${u.nome || u.id}: ${r.erro || "falhou"}`, "l-warn");
-        await dormir(delay * 1000);
       }
       if (!cursor) break;
     }
@@ -431,14 +557,82 @@ async function aquecer() {
   }
 }
 
+// ---------- meus grupos (Graph API) + marketplace ----------
+async function meusGrupos() {
+  $("btnMeusGrupos").disabled = true;
+  try {
+    registrar("Carregando seus grupos via Graph API...");
+    const res = await comando("meusGrupos");
+    if (res.resultado !== "ok")
+      return registrar(res.erro || "falhou", "l-err");
+    registrar(`Token obtido via ${res.fonte || "?"}`, "l-info");
+    gruposEncontrados = res.grupos;
+    $("resultados").innerHTML = res.grupos
+      .map((g) => `<div class="grupo-item">
+          <input type="checkbox" data-gid="${g.id}" data-gnome="${g.nome}" checked>
+          <span>${g.nome}</span><small>${g.membros ?? ""}${g.admin ? " · admin" : ""}</small></div>`)
+      .join("");
+    registrar(`${res.grupos.length} grupos seus — marque e use "Selecionados → lista"`, "l-ok");
+  } catch (e) {
+    registrar(e.message, "l-err");
+  } finally {
+    $("btnMeusGrupos").disabled = false;
+  }
+}
+
+async function publicarListing() {
+  const titulo = $("mkTitulo").value.trim();
+  const preco = $("mkPreco").value.trim();
+  const descricao = $("mkDescricao").value.trim();
+  const gruposBrutos = $("mkGrupos").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  const paraMarketplace = $("mkMarketplace").checked;
+  const arquivos = [...$("mkFotos").files];
+  if (!titulo && !descricao) return registrar("Preencha título ou descrição", "l-err");
+  if (!paraMarketplace && !gruposBrutos.length)
+    return registrar("Sem destino: marque Marketplace ou liste grupos", "l-err");
+  controle(true);
+  try {
+    const fotosDataUrl = [];
+    for (const f of arquivos.slice(0, 10))
+      fotosDataUrl.push(await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f);
+      }));
+    const idsGrupos = [];
+    for (const g of gruposBrutos) {
+      try { idsGrupos.push(await resolver(g)); }
+      catch (e) { registrar(`${g}: ${e.message}`, "l-warn"); }
+    }
+    registrar(`Publicando anúncio (${fotosDataUrl.length} fotos, ${idsGrupos.length} grupos, marketplace=${paraMarketplace})...`);
+    const res = await comando("listing", {
+      titulo, descricao, preco, fotosDataUrl, idsGrupos, paraMarketplace,
+    });
+    if (res.resultado === "ok")
+      registrar(`Anúncio ${res.situacao || "publicado"}${res.postId ? " (id " + res.postId + ")" : ""}`, "l-ok");
+    else if (res.resultado === "bloqueado")
+      registrar(`BLOQUEIO — ${res.erro}`, "l-err");
+    else registrar(res.erro || "falhou", "l-err");
+  } catch (e) {
+    registrar(e.message, "l-err");
+  } finally {
+    controle(false);
+  }
+}
+
 // ---------- listeners ----------
 $("btnPostar").addEventListener("click", () => { if (!rodando) postar(); });
+$("btnMeusGrupos").addEventListener("click", () => { if (!rodando) meusGrupos(); });
+$("btnLimparLista").addEventListener("click", () => { $("grupos").value = ""; });
+$("btnListing").addEventListener("click", () => { if (!rodando) publicarListing(); });
 $("btnBuscar").addEventListener("click", () => { if (!rodando) buscar(); });
 $("btnEntrar").addEventListener("click", () => { if (!rodando) entrar(); });
 $("btnEngajar").addEventListener("click", () => { if (!rodando) engajar(); });
 $("btnAmizade").addEventListener("click", () => { if (!rodando) amizade(); });
 $("btnAquecer").addEventListener("click", () => { if (!rodando) aquecer(); });
 $("btnParar").addEventListener("click", () => { parar = true; });
+$("btnStudio")?.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("studio.html") });
+});
 $("btnAddLista").addEventListener("click", () => {
   const lista = selecionados();
   if (!lista.length) return registrar("Nenhum grupo selecionado", "l-err");
@@ -457,6 +651,11 @@ chrome.runtime.onMessage.addListener((m) => {
     registrar(`Aprendido: ${TIPOS[m.dados.tipo] || m.dados.tipo} (${m.dados.nomeAmigavel})`, "l-info");
   if (m.tipo === "stats" && m.dados.docIds)
     registrar(`${m.dados.docIds} doc_ids minerados da página`, "l-info");
+  // kill-switch (portado: sessionInvalidated) — para TODOS os jobs
+  if (m.tipo === "sessaoInvalidada") {
+    parar = true;
+    registrar(`SESSÃO PERDIDA (${m.dados?.motivo || "?"}) — tudo parado. Faça login de novo.`, "l-err");
+  }
 });
 
 // ---------- retomada de lote ----------

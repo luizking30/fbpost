@@ -22,7 +22,13 @@
     amigo: /FriendingComet.*(AddFriend|Send)|AddFriend|FriendRequest.*Send|SendFriendRequest/i,
     membros: /Group.*Member|Member.*(List|Pagination)|GroupsCometMembers|things_in_common/i,
     memberQ: /Members(Admins|Experts|Contributors|NearYou)?/i,
+    // pipeline de vídeo e marketplace (portado do Pulso)
+    videoStart: /video\/upload\/requests\/start/i,
+    videoReceive: /video\/upload\/requests\/receive/i,
+    rupload: /rupload[^/]*\.facebook\.com|\/fb_video\//i,
+    bnzai: /\/ajax\/bnzai/i,
   };
+  const ID_MARKETPLACE = "214423095669777";
 
   const RE_JA_AMIGO = /already_friends|already sent|j[áa] (enviou|s[ãa]o amigos)|friend_request_already|ARE_FRIENDS|"text":"Amigos"/i;
   const RE_ENVIADO = /request_sent|outgoing|pending|aguardando|enviada|CONFIRM|can_cancel_friend_request/i;
@@ -85,6 +91,59 @@
     let s = 0;
     for (let i = 0; i < dtsg.length; i++) s += dtsg.charCodeAt(i);
     return "2" + s;
+  };
+
+  // ---------- conjunto completo de tokens (portado: at/lt) ----------
+  const tokensDaPagina = () => {
+    const dtsg = dtsgDaPagina();
+    let lsd = "", spinR = "", spinB = "", spinT = "", rev = "", hsi = "";
+    try {
+      const req = window.require;
+      if (typeof req === "function") {
+        const l = req("LSD");
+        if (l?.token) lsd = l.token;
+        const sd = req("SiteData");
+        if (sd) {
+          spinR = String(sd.__spin_r ?? sd.server_revision ?? "") || spinR;
+          spinB = String(sd.__spin_b ?? sd.haste_session ?? "") || spinB;
+          spinT = String(sd.__spin_t ?? "") || spinT;
+          rev = String(sd.client_revision ?? "") || rev;
+          hsi = String(sd.hsi ?? "") || hsi;
+        }
+      }
+    } catch {}
+    const html = document.documentElement.innerHTML;
+    const m = (re) => html.match(re)?.[1] ?? "";
+    if (!lsd) lsd = m(/\["LSD",\[\],\{"token":"([^"]+)"/) || m(/name="lsd" value="([^"]+)"/);
+    if (!spinR) spinR = m(/"__spin_r":(\d+)/);
+    if (!spinB) spinB = m(/"__spin_b":"?([^",}]+)"?/);
+    if (!spinT) spinT = m(/"__spin_t":(\d+)/);
+    if (!rev) rev = m(/"client_revision":(\d+)/) || spinR;
+    if (!hsi) hsi = m(/"hsi":"([^"]+)"/);
+    return { dtsg, lsd, spinR, spinB, spinT, rev, hsi };
+  };
+
+  // substituição embutida com fronteira de dígito (evita corromper ids)
+  const trocarEmbutido = (texto, de, para) =>
+    de && para && texto.includes(de)
+      ? texto.replace(new RegExp(`(?<!\\d)${de}(?!\\d)`, "g"), para)
+      : texto;
+
+  // renova um param capturado com valor fresco da página
+  const renovarParam = (nome, valor, tokens, uid, sampleUid) => {
+    switch (nome) {
+      case "fb_dtsg": return tokens.dtsg || valor;
+      case "jazoest": return tokens.dtsg ? jazoestDe(tokens.dtsg) : valor;
+      case "__user": return uid || valor;
+      case "lsd": return tokens.lsd || valor;
+      case "__spin_r": return tokens.spinR || valor;
+      case "__spin_b": return tokens.spinB || valor;
+      case "__spin_t": return tokens.spinT || valor;
+      case "__rev": return tokens.rev || valor;
+      case "__hsi": return tokens.hsi || valor;
+    }
+    if (RE_IDEMPOTENTE.test(nome)) return novoUuid();
+    return sampleUid && uid ? trocarEmbutido(valor, sampleUid, uid) : valor;
   };
 
   // ---------- extratores de variables ----------
@@ -221,6 +280,66 @@
     return "";
   };
 
+  // id de vídeo nos variables (portado: E)
+  const acharIdVideo = (obj) => {
+    if (!obj || typeof obj !== "object") return "";
+    for (const [k, v] of Object.entries(obj)) {
+      if (/video/i.test(k)) {
+        if (/^\d{6,}$/.test(String(v))) return String(v);
+        if (v && typeof v === "object") {
+          const id = v.id ?? v.video_id;
+          if (id && /^\d{6,}$/.test(String(id))) return String(id);
+        }
+      }
+      if (v && typeof v === "object") {
+        const r = acharIdVideo(v);
+        if (r) return r;
+      }
+    }
+    return "";
+  };
+
+  // todos os photo.id dos variables (portado: z)
+  const acharIdsFotos = (obj, acc = []) => {
+    if (!obj || typeof obj !== "object") return acc;
+    for (const [k, v] of Object.entries(obj)) {
+      if (/^photo$/i.test(k) && v && typeof v === "object") {
+        const id = v.id;
+        if (id && /^\d{6,}$/.test(String(id)) && !acc.includes(String(id)))
+          acc.push(String(id));
+      }
+      if (v && typeof v === "object") acharIdsFotos(v, acc);
+    }
+    return acc;
+  };
+
+  // nó product_item de listing do Marketplace (portado: L)
+  const acharProductItem = (obj) => {
+    if (!obj || typeof obj !== "object") return null;
+    for (const [k, v] of Object.entries(obj)) {
+      if (/product_item/i.test(k) && v && typeof v === "object" && !Array.isArray(v))
+        return v;
+      if (v && typeof v === "object") {
+        const r = acharProductItem(v);
+        if (r) return r;
+      }
+    }
+    return null;
+  };
+
+  // to_id do audience (marketplace/grupo alvo do listing)
+  const acharToId = (obj) => {
+    if (!obj || typeof obj !== "object") return "";
+    for (const [k, v] of Object.entries(obj)) {
+      if (/^to_id$/i.test(k) && /^\d{6,}$/.test(String(v))) return String(v);
+      if (v && typeof v === "object") {
+        const r = acharToId(v);
+        if (r) return r;
+      }
+    }
+    return "";
+  };
+
   const acharIdAmigo = (obj) => {
     if (!obj || typeof obj !== "object") return "";
     for (const [k, v] of Object.entries(obj)) {
@@ -311,7 +430,8 @@
 
   // ---------- montador de requisição (replay) ----------
   const montarRequisicao = (cal, { trocas = [], cursor, variaveisBase, texto }) => {
-    const dtsg = dtsgDaPagina();
+    const tokens = tokensDaPagina();
+    const dtsg = tokens.dtsg;
     if (!dtsg) throw new Error("fb_dtsg não encontrado — recarregue a página do Facebook");
     const uid = uidAtual();
 
@@ -324,17 +444,33 @@
         ? substituirEmbutido(vars, String(t.de), String(t.para))
         : substituirProfundo(vars, String(t.de), String(t.para));
     }
+    let textoDefinido = false;
     if (texto != null) {
-      if (!definirTextoMsg(vars, texto)) definirTextoComposto(vars, texto);
+      textoDefinido = definirTextoMsg(vars, texto) || definirTextoComposto(vars, texto);
     }
     if (cursor !== undefined) vars = definirCursor(vars, cursor);
     vars = renovarSessaoComposer(vars);
 
+    // remove chaves internas do Relay (proveedores de dados do FB)
+    vars = JSON.parse(
+      JSON.stringify(vars).replace(
+        /"__relay_internal__pv__[^"]*":(?:false|true|\d+|"[^"]*"),?/g,
+        (m) => (m.endsWith(",") ? "" : m)
+      )
+    );
+
+    // calibração podre: o texto da amostra não foi substituído em lugar nenhum
+    if (texto != null && cal.sampleText && !textoDefinido) {
+      const amostra = JSON.stringify(cal.sampleText).slice(1, -1);
+      if (!JSON.stringify(vars).includes(amostra))
+        throw new Error("calibracao_divergente — molde não aceita texto; recalibre postando manualmente");
+    }
+
     const corpo = new URLSearchParams();
     for (const [k, v] of Object.entries(cal.params)) {
-      if (["fb_dtsg", "jazoest", "__user", "variables", "doc_id", "fb_api_req_friendly_name", "lsd"].includes(k))
+      if (["fb_dtsg", "jazoest", "__user", "variables", "doc_id", "fb_api_req_friendly_name"].includes(k))
         continue;
-      corpo.set(k, cal.sampleUid && uid && v === cal.sampleUid ? uid : v);
+      corpo.set(k, renovarParam(k, v, tokens, uid, cal.sampleUid));
     }
     corpo.set("fb_dtsg", dtsg);
     corpo.set("jazoest", jazoestDe(dtsg));
@@ -354,6 +490,9 @@
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: corpo.toString(),
     });
+    // sessão morreu no meio da automação (redirect p/ login/checkpoint)
+    if (/\/(login|checkpoint)\b/.test(res.url || ""))
+      emitir("sessaoInvalidada", { motivo: "redirect_login" });
     return { status: res.status, texto: await res.text() };
   };
 
@@ -426,18 +565,72 @@
     });
   };
 
-  let uploadFotoCapturado = null; // {url, method, fields, fileField}
+  let uploadFotoCapturado = null;   // {url, metodo, campos, campoArquivo}
+  let videoInicio = null;           // {url, metodo, campos} — /video/upload/requests/start
+  let videoUpload = null;           // {url, metodo, headers} — rupload binário
+  let videoFim = null;              // {url, metodo, campos} — /video/upload/requests/receive
+  let respostaInicioVideo = "";     // amostra da resposta do start
+
+  const paramsDeBody = (body) => {
+    const saida = {};
+    if (typeof body === "string") new URLSearchParams(body).forEach((v, k) => (saida[k] = v));
+    else if (body instanceof URLSearchParams) body.forEach((v, k) => (saida[k] = v));
+    else if (body instanceof FormData)
+      body.forEach((v, k) => { if (typeof v === "string") saida[k] = v; });
+    else return null;
+    return saida;
+  };
 
   const capturarUpload = (url, metodo, formData) => {
     const campos = {};
     let campoArquivo = null, tipoArquivo = "";
     formData.forEach((v, k) => {
       if (typeof v === "string") campos[k] = v;
-      else { campoArquivo = k; tipoArquivo = `${v.type || ""} ${v.name || ""}`; }
+      else { campoArquivo = k; tipoArquivo = `${v.type || ""} ${v.name || ""} ${v.size ?? ""}`; }
     });
-    if (campoArquivo && /image\/|\.(jpe?g|png|gif|webp)\b/i.test(tipoArquivo))
+    if (campoArquivo && (/image\//i.test(tipoArquivo) || /\.(jpe?g|png|gif|webp)\b/i.test(tipoArquivo)))
       uploadFotoCapturado = { url, metodo: metodo || "POST", campos, campoArquivo };
   };
+
+  const ehBinario = (body) =>
+    body instanceof ArrayBuffer || ArrayBuffer.isView(body) ||
+    ("undefined" != typeof Blob && body instanceof Blob);
+
+  // estágios do upload de vídeo (portado do sniffer deles)
+  const capturarFluxoVideo = (url, metodo, headers, body) => {
+    if (RE.rupload.test(url) && ehBinario(body)) {
+      videoUpload = { url, metodo: metodo || "POST", headers };
+      return true;
+    }
+    if (RE.videoStart.test(url) && !ehBinario(body)) {
+      const campos = paramsDeBody(body);
+      if (campos) videoInicio = { url, metodo: metodo || "POST", campos };
+      return true;
+    }
+    if (RE.videoReceive.test(url) && !ehBinario(body)) {
+      const campos = paramsDeBody(body);
+      if (campos) videoFim = { url, metodo: metodo || "POST", campos };
+      return true;
+    }
+    return false;
+  };
+
+  // resposta do video start (amostra p/ reconhecer session_id/upload_url)
+  const guardarRespostaVideo = (url, texto) => {
+    if (window.__fbPostando) return;
+    if (RE.videoStart.test(url)) respostaInicioVideo = texto.slice(0, 4000);
+  };
+
+  // campo do FB pode ser string, número ou {text: "..."} (portado: F)
+  const textoDoCampo = (v) =>
+    ("string" == typeof v || "number" == typeof v)
+      ? String(v)
+      : v && typeof v === "object" && "string" == typeof v.text
+        ? v.text
+        : "";
+
+  const idGrupoDaUrl = () =>
+    location.pathname.match(/\/groups\/(\d+)/)?.[1] ?? "";
 
   const inspecionarGraphql = (params) => {
     if (window.__fbPostando) return;
@@ -461,15 +654,77 @@
     };
 
     try {
-      // post em grupo (texto / foto)
+      // listing do Marketplace (portado: __spListingCal)
+      if (RE.marketplace.test(nome)) {
+        const item = acharProductItem(vars);
+        if (!item) return;
+        const alvo = acharToId(vars) || acharIdGrupo(vars) || idGrupoDaUrl();
+        if (!alvo) return;
+        const xpost = Array.isArray(item.xpost_target_ids)
+          ? item.xpost_target_ids.map(String).filter((x) => /^\d{6,}$/.test(x))
+          : [];
+        registrarCaptura("listing", {
+          ...base,
+          sampleGroupId: alvo,
+          sampleTitulo: textoDoCampo(item.title),
+          sampleDescricao: textoDoCampo(item.description),
+          samplePreco: textoDoCampo(item.item_price?.price),
+          sampleMoeda: textoDoCampo(item.item_price?.currency),
+          samplePhotoIds: acharIdsFotos(vars),
+          sampleXpostIds: xpost,
+          vaiMarketplace: xpost.includes(ID_MARKETPLACE),
+          upload: uploadFotoCapturado ?? undefined,
+        });
+        return;
+      }
+
+      // post em grupo (texto / foto / vídeo / misto)
       if (
         RE.composer.test(nome) && RE.cria.test(nome) && !RE.marketplace.test(nome)
       ) {
-        const gid = acharIdGrupo(vars);
+        const gid = acharIdGrupo(vars) || idGrupoDaUrl();
         const texto = acharTextoMsg(vars);
-        if (!gid || !texto) return;
-        const cal = { ...base, sampleGroupId: gid, sampleText: texto };
         const idMidia = acharIdMidia(vars);
+        const idVideo = acharIdVideo(vars);
+        if (!gid || (!texto && !idMidia && !idVideo)) return;
+        const cal = { ...base, sampleGroupId: gid, sampleText: texto };
+        // foto+vídeo juntos (portado: __spMixedCal)
+        if (idVideo && videoUpload && idMidia && uploadFotoCapturado) {
+          registrarCaptura("postMisto", {
+            composer: { ...cal, samplePhotoId: idMidia, sampleVideoId: idVideo },
+            photoUpload: uploadFotoCapturado,
+            videoUpload: {
+              startUrl: videoInicio?.url, startMetodo: videoInicio?.metodo,
+              startCampos: videoInicio?.campos,
+              uploadUrl: videoUpload.url, uploadMetodo: videoUpload.metodo,
+              uploadHeaders: videoUpload.headers,
+              receiveUrl: videoFim?.url, receiveMetodo: videoFim?.metodo,
+              receiveCampos: videoFim?.campos,
+              startRespostaAmostra: respostaInicioVideo || undefined,
+              sampleVideoId: idVideo,
+            },
+            capturadoEm: Date.now(),
+          });
+          return;
+        }
+        // só vídeo (portado: __spVideoCal)
+        if (idVideo && videoUpload) {
+          registrarCaptura("postVideo", {
+            composer: { ...cal, sampleVideoId: idVideo },
+            upload: {
+              startUrl: videoInicio?.url, startMetodo: videoInicio?.metodo,
+              startCampos: videoInicio?.campos,
+              uploadUrl: videoUpload.url, uploadMetodo: videoUpload.metodo,
+              uploadHeaders: videoUpload.headers,
+              receiveUrl: videoFim?.url, receiveMetodo: videoFim?.metodo,
+              receiveCampos: videoFim?.campos,
+              startRespostaAmostra: respostaInicioVideo || undefined,
+              sampleVideoId: idVideo,
+            },
+            capturadoEm: Date.now(),
+          });
+          return;
+        }
         if (idMidia && uploadFotoCapturado) {
           registrarCaptura("postFoto", {
             composer: { ...cal, samplePhotoId: idMidia },
@@ -559,42 +814,201 @@
     } catch {}
   };
 
+  // rota Comet atual (param __crn da URL da req) — usada p/ membros por tipo
+  let rotaAtual = "";
+  const emRotaMembros = () =>
+    /\/groups\/\d+\/members\/(admins|experts|contributors|near_you)/.test(location.pathname) ||
+    /Members(Admins|Experts|Contributors|NearYou)?Route/i.test(rotaAtual);
+
+  // minera pares friendlyName/doc_id de um texto e registra (portado: ge/we)
+  const minerarPares = (texto) => {
+    window.__SP_DOCIDS = window.__SP_DOCIDS || new Map();
+    const mapa = window.__SP_DOCIDS;
+    const pares = [];
+    let m;
+    const r1 = /"fb_api_req_friendly_name"\s*:\s*"([^"]+)"[\s\S]{0,1200}?"doc_id"\s*:\s*"?(\d{8,})"?/g;
+    for (; (m = r1.exec(texto)); ) pares.push([m[1], m[2]]);
+    const r2 = /"doc_id"\s*:\s*"?(\d{8,})"?[\s\S]{0,1200}?"fb_api_req_friendly_name"\s*:\s*"([^"]+)"/g;
+    for (; (m = r2.exec(texto)); ) pares.push([m[2], m[1]]);
+    const gid = idGrupoDaUrl();
+    for (const [nome2, docId] of pares) {
+      mapa.set(nome2, docId);
+      // queries de membros viram calibração mínima pronta p/ replay
+      if (gid && RE.membros.test(nome2)) {
+        const rota = location.pathname.match(
+          /\/members\/(admins|experts|contributors|near_you)/
+        )?.[1];
+        registrarCaptura(rota ? `membros_${rota}` : "membros", {
+          nomeAmigavel: nome2,
+          docId,
+          params: {},
+          variaveis: { groupID: gid },
+          sampleGroupId: gid,
+          sampleUid: uidAtual(),
+          capturadoEm: Date.now(),
+        });
+      }
+    }
+    return pares.length;
+  };
+
+  const minerarRespostaBnzai = (url, texto) => {
+    rotaAtual = decodeURIComponent(url.match(/__crn=([^&]+)/)?.[1] ?? "");
+    try {
+      const limpo = String(texto || "").replace(/^\s*for\s*\(;;\)\s*;/, "");
+      if (limpo.length < 20) return;
+      minerarPares(limpo);
+      if (emRotaMembros()) minerarDocIds();
+    } finally {
+      rotaAtual = "";
+    }
+  };
+
+  // bnzai com FormData: blobs podem conter queries comprimidas (portado: Ae/Ce)
+  const minerarBnzaiFormData = (url, formData) => {
+    rotaAtual = decodeURIComponent(url.match(/__crn=([^&]+)/)?.[1] ?? "");
+    try {
+      const campos = {}, blobs = [];
+      formData.forEach((v, k) => {
+        if (typeof v === "string") campos[k] = v;
+        else blobs.push(v);
+      });
+      if (campos.q?.includes("doc_id")) return void minerarPares(campos.q);
+      for (const blob of blobs.filter((b) => b.size > 200)) {
+        blob.arrayBuffer().then(async (buf) => {
+          const bytes = new Uint8Array(buf);
+          // tenta gzip/deflate primeiro; senão extrai strings ASCII
+          if ("undefined" != typeof DecompressionStream)
+            for (const fmt of ["gzip", "deflate", "deflate-raw"]) {
+              try {
+                const txt = await new Response(
+                  new Blob([bytes]).stream().pipeThrough(new DecompressionStream(fmt))
+                ).text();
+                if (/doc_id|fb_api_req_friendly_name/i.test(txt)) {
+                  minerarPares(txt);
+                  return;
+                }
+              } catch {}
+            }
+          let ascii = "", cur = "";
+          for (let i = 0; i < bytes.length; i++) {
+            if (bytes[i] >= 32 && bytes[i] <= 126) cur += String.fromCharCode(bytes[i]);
+            else { if (cur.length >= 8) ascii += cur + " "; cur = ""; }
+            if (ascii.length > 5e5) break;
+          }
+          if (cur.length >= 8) ascii += cur;
+          if (/doc_id|fb_api_req_friendly_name/i.test(ascii)) minerarPares(ascii);
+        }).catch(() => {});
+      }
+      if (emRotaMembros()) minerarDocIds();
+    } finally {
+      rotaAtual = "";
+    }
+  };
+
   const inspecionarBody = (url, body) => {
     try {
+      if (RE.bnzai.test(url)) {
+        if (body instanceof FormData) minerarBnzaiFormData(url, body);
+        else {
+          const campos = paramsDeBody(body);
+          if (campos?.q?.includes("doc_id")) minerarPares(campos.q);
+        }
+        return;
+      }
       if (!url.includes("/api/graphql/")) return;
-      if (typeof body !== "string" || !body.includes("doc_id")) return;
-      inspecionarGraphql(new URLSearchParams(body));
+      let params = null;
+      if (typeof body === "string" && body.includes("doc_id"))
+        params = new URLSearchParams(body);
+      else if (body instanceof URLSearchParams) params = body;
+      else if (body instanceof FormData) {
+        params = new URLSearchParams();
+        body.forEach((v, k) => { if (typeof v === "string") params.set(k, v); });
+        if (!params.get("doc_id")) return;
+      }
+      if (params) inspecionarGraphql(params);
     } catch {}
   };
 
+  // ---------- hooks de rede ----------
   const _fetch = window.fetch;
   window.fetch = function (...args) {
+    const promessa = _fetch.apply(this, args);
     try {
       const [url, opts] = args;
       const u = typeof url === "string" ? url : url?.url || "";
       const metodo = opts?.method || "POST";
-      const body = opts?.body;
-      if (u.includes("/api/graphql/") && typeof body === "string")
-        inspecionarBody(u, body);
-      else if (body instanceof FormData && !u.includes("/api/graphql/"))
-        capturarUpload(u, metodo, body);
+      let body = opts?.body;
+      const inspecionar = (b) => {
+        try {
+          if (u.includes("/api/graphql/") || RE.bnzai.test(u)) inspecionarBody(u, b);
+          else if (!capturarFluxoVideo(u, metodo, headersDe(opts?.headers), b)) {
+            if (b instanceof FormData) capturarUpload(u, metodo, b);
+          }
+        } catch {}
+      };
+      if (null == body && url instanceof Request) {
+        try {
+          const req = url.clone();
+          const ct = (req.headers.get("content-type") || "").toLowerCase();
+          if (ct.includes("multipart/form-data") || RE.bnzai.test(u))
+            req.formData().then(inspecionar).catch(() => {});
+          else if (ct.includes("application/x-www-form-urlencoded") || u.includes("/api/graphql/"))
+            req.text().then(inspecionar).catch(() => {});
+        } catch {}
+      } else inspecionar(body);
+
+      // respostas: bnzai → minera doc_ids; video start/receive → amostra
+      promessa.then((res) => {
+        try {
+          if (RE.bnzai.test(u))
+            res.clone().text().then((t) => minerarRespostaBnzai(u, t)).catch(() => {});
+          else if (RE.videoStart.test(u) || RE.videoReceive.test(u))
+            res.clone().text().then((t) => guardarRespostaVideo(u, t)).catch(() => {});
+        } catch {}
+      }).catch(() => {});
     } catch {}
-    return _fetch.apply(this, args);
+    return promessa;
+  };
+
+  const headersDe = (h) => {
+    const saida = {};
+    if (!h) return saida;
+    if ("undefined" != typeof Headers && h instanceof Headers)
+      h.forEach((v, k) => (saida[k] = v));
+    else if (Array.isArray(h)) for (const [k, v] of h) saida[k] = String(v);
+    else for (const [k, v] of Object.entries(h)) saida[k] = String(v);
+    return saida;
   };
 
   const _open = XMLHttpRequest.prototype.open;
   const _send = XMLHttpRequest.prototype.send;
+  const _setHeader = XMLHttpRequest.prototype.setRequestHeader;
   XMLHttpRequest.prototype.open = function (metodo, url, ...resto) {
     this.__spUrl = url;
     this.__spMetodo = metodo;
+    this.__spHeaders = {};
     return _open.call(this, metodo, url, ...resto);
+  };
+  XMLHttpRequest.prototype.setRequestHeader = function (nome, valor) {
+    if (this.__spHeaders) this.__spHeaders[nome] = valor;
+    return _setHeader.call(this, nome, valor);
   };
   XMLHttpRequest.prototype.send = function (body) {
     try {
-      if (this.__spUrl?.includes("/api/graphql/") && typeof body === "string")
-        inspecionarBody(this.__spUrl, body);
-      else if (body instanceof FormData && !this.__spUrl?.includes("/api/graphql/"))
-        capturarUpload(this.__spUrl, this.__spMetodo, body);
+      const u = this.__spUrl || "";
+      if (u.includes("/api/graphql/") || RE.bnzai.test(u)) inspecionarBody(u, body);
+      else if (!capturarFluxoVideo(u, this.__spMetodo, this.__spHeaders ?? {}, body)) {
+        if (body instanceof FormData) capturarUpload(u, this.__spMetodo, body);
+      }
+      if (u && (RE.bnzai.test(u) || RE.videoStart.test(u) || RE.videoReceive.test(u)))
+        this.addEventListener("load", () => {
+          try {
+            const t = "string" == typeof this.responseText ? this.responseText : "";
+            if (RE.bnzai.test(u)) minerarRespostaBnzai(u, t);
+            else guardarRespostaVideo(u, t);
+          } catch {}
+        });
     } catch {}
     return _send.call(this, body);
   };
@@ -648,11 +1062,187 @@
     return id;
   }
 
+  // ---------- upload de vídeo (portado: mt/ht/dt) ----------
+  const extVideo = (mime) =>
+    /quicktime|mov/i.test(mime) ? "mov"
+      : /webm/i.test(mime) ? "webm"
+      : /matroska|mkv/i.test(mime) ? "mkv" : "mp4";
+
+  const normalizarCamposVideo = (campos, tamanho, mime, chunk = "") => {
+    const ext = extVideo(mime), out = {};
+    for (const [k, v] of Object.entries(campos ?? {})) {
+      const kl = k.toLowerCase();
+      if (/^(partition_start_offset|start_offset)$/.test(kl)) out[k] = "0";
+      else if (/^(file_?size|partition_end_offset|end_offset)$/.test(kl) ||
+               (/file_?size|length|size/i.test(k) && /^\d+$/.test(String(v))))
+        out[k] = String(tamanho);
+      else if (/file_?extension/i.test(k)) out[k] = ext;
+      else if (/file_chunk/i.test(k)) out[k] = chunk || v;
+      else out[k] = v;
+    }
+    return out;
+  };
+
+  const extrairIdVideo = (texto) =>
+    pegarPrimeiro(texto.replace(/^for\s*\(;;\);/, "").trim(),
+      /"video_id":"?(\d{6,})"?/, /"videoID":"?(\d{6,})"?/, /"id":"?(\d{8,})"?/) ?? "";
+
+  const extrairSessaoVideo = (texto) =>
+    pegarPrimeiro(texto.replace(/^for\s*\(;;\);/, ""),
+      /fb_video\\?\/([a-f0-9]{16,})/i,
+      /"(?:upload_session_id|session_id|stream_id|video_file_chunk_id)":"([a-f0-9]{16,})"/i) ?? "";
+
+  const extrairUrlUpload = (texto) => {
+    const m = pegarPrimeiro(texto.replace(/^for\s*\(;;\);/, ""),
+      /"(https:\\?\/\\?\/rupload[^"]*?fb_video[^"]*?)"/,
+      /"(https:\\?\/\\?\/[^"]*?\/fb_video\/[^"]*?)"/,
+      /"upload_url":"([^"]+)"/,
+      /"endpoint":"([^"]+)"/);
+    return m ? m.replace(/\\\//g, "/") : "";
+  };
+
+  async function subirVideo(videoUp, blob, composerVars, uid) {
+    const tokens = tokensDaPagina();
+    if (!videoUp?.startUrl || !videoUp?.uploadUrl)
+      throw new Error("calibração de vídeo incompleta — poste um vídeo NOVO manualmente");
+    const tamanho = blob.size, mime = blob.type || "video/mp4";
+    const nome = `video-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extVideo(mime)}`;
+
+    // ids de sessão reaproveitados entre start/receive/headers
+    const procurarSessao = (re) => {
+      for (const campos of [videoUp.startCampos, videoUp.receiveCampos])
+        for (const [k, v] of Object.entries(campos ?? {}))
+          if (re.test(k)) return v;
+      return JSON.stringify(composerVars ?? {})
+        .match(new RegExp('"[a-z_]*' + re.source + '[a-z_]*":"([^"]+)"', "i"))?.[1] ?? "";
+    };
+    const sessoes = [];
+    for (const re of [/composer_session/i, /waterfall/i]) {
+      const v = procurarSessao(re);
+      if (v) sessoes.push({ de: v, para: novoUuid() });
+    }
+    const renovarCampos = (campos) => {
+      const out = {};
+      for (const [k, v] of Object.entries(campos ?? {})) {
+        const s = sessoes.find((x) => x.de === v);
+        out[k] = s ? s.para : renovarParam(k, v, tokens, uid, videoUp.sampleUid);
+      }
+      return out;
+    };
+
+    // 1) start
+    const camposStart = normalizarCamposVideo(
+      renovarCampos(videoUp.startCampos), tamanho, mime);
+    const resStart = await fetch(videoUp.startUrl, {
+      method: videoUp.startMetodo || "POST", credentials: "include",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(camposStart).toString(),
+    });
+    const txtStart = await resStart.text();
+    let idVideo = extrairIdVideo(txtStart);
+    const sessao = extrairSessaoVideo(txtStart);
+    const urlExtraida = extrairUrlUpload(txtStart);
+
+    // 2) bytes pro rupload
+    const trocaIdVideo = (s) =>
+      idVideo && videoUp.sampleVideoId
+        ? s.split(videoUp.sampleVideoId).join(idVideo) : s;
+    let urlUpload = urlExtraida || videoUp.uploadUrl;
+    if (sessao)
+      urlUpload = urlUpload.replace(
+        /(fb_video\/)[a-f0-9]+(?:-\d+-\d+)?/i, `$1${sessao}-0-${tamanho}`);
+    urlUpload = urlUpload
+      .replace(/([?&]fb_dtsg=)[^&]*/i, `$1${encodeURIComponent(tokens.dtsg)}`)
+      .replace(/([?&]jazoest=)[^&]*/i, `$1${jazoestDe(tokens.dtsg)}`)
+      .replace(/([?&]__user=)[^&]*/i, `$1${uid}`);
+    for (const s of sessoes) urlUpload = urlUpload.split(s.de).join(s.para);
+
+    const headers = {};
+    for (const [k, v] of Object.entries(videoUp.uploadHeaders ?? {})) {
+      const kl = k.toLowerCase();
+      if (kl === "fb_dtsg") headers[k] = tokens.dtsg;
+      else if (kl === "jazoest") headers[k] = jazoestDe(tokens.dtsg);
+      else if (kl === "content-length" || kl === "offset" || kl.startsWith("x-entity")) continue;
+      else if (kl === "x-total-asset-size" || kl === "end_offset") headers[k] = String(tamanho);
+      else if (kl === "start_offset") headers[k] = "0";
+      else if (kl === "id" && sessao) headers[k] = sessao;
+      else if (/composer_session/i.test(kl)) {
+        const s = sessoes.find((x) => x.de === v);
+        headers[k] = s ? s.para : v;
+      } else headers[k] = trocaIdVideo(v);
+    }
+    headers["Offset"] = "0";
+    headers["X-Entity-Length"] = String(tamanho);
+    headers["X-Entity-Name"] = nome;
+    headers["X-Entity-Type"] = mime;
+
+    const resBytes = await fetch(urlUpload, {
+      method: videoUp.uploadMetodo || "POST", credentials: "include",
+      headers, body: blob,
+    });
+    const txtBytes = await resBytes.text();
+    if (!idVideo) idVideo = extrairIdVideo(txtBytes);
+    const chunk = txtBytes.match(/"h"\s*:\s*"([^"]+)"/)?.[1] ?? "";
+
+    // 3) receive/finalize
+    if (videoUp.receiveUrl) {
+      const camposFim = normalizarCamposVideo(
+        renovarCampos(videoUp.receiveCampos), tamanho, mime, chunk);
+      const fin = {};
+      for (const [k, v] of Object.entries(camposFim)) fin[k] = trocaIdVideo(v);
+      const resFim = await fetch(trocaIdVideo(videoUp.receiveUrl), {
+        method: videoUp.receiveMetodo || "POST", credentials: "include",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(fin).toString(),
+      });
+      const txtFim = await resFim.text();
+      if (!idVideo) idVideo = extrairIdVideo(txtFim);
+      if (!resFim.ok)
+        throw new Error(`finalização do vídeo falhou (http ${resFim.status})`);
+    }
+    if (!idVideo) throw new Error("upload de vídeo falhou (sem id)");
+    return { idVideo, sessoes };
+  }
+
+  const blobDeDataUrl = async (dataUrl) => (await fetch(dataUrl)).blob();
+
   // ---------- ações ----------
-  async function postarNoGrupo({ idGrupo, texto, fotoDataUrl }) {
+  async function postarNoGrupo({ idGrupo, texto, fotoDataUrl, videoDataUrl }) {
     const postando = window.__fbPostando;
     window.__fbPostando = true;
     try {
+      // foto + vídeo juntos (postMisto)
+      if (fotoDataUrl && videoDataUrl && window.__SP_CAPTURAS.postMisto) {
+        const cal = window.__SP_CAPTURAS.postMisto;
+        const uid = uidAtual();
+        const { idVideo, sessoes } = await subirVideo(
+          cal.videoUpload, await blobDeDataUrl(videoDataUrl), cal.composer.variaveis, uid);
+        const idFoto = await subirFoto(cal.photoUpload, fotoDataUrl);
+        const trocas = [
+          { de: cal.composer.sampleGroupId, para: idGrupo, embutido: true },
+          { de: cal.composer.sampleVideoId, para: idVideo, embutido: true },
+          { de: cal.composer.samplePhotoId, para: idFoto, embutido: true },
+          ...sessoes.map((s) => ({ de: s.de, para: s.para, embutido: true })),
+        ].filter((t) => t.de && t.para);
+        const corpo = montarRequisicao(cal.composer, { trocas, texto });
+        const { status, texto: bruto } = await executarGraphql(corpo);
+        return classificarResposta(status, bruto);
+      }
+      // só vídeo
+      if (videoDataUrl && window.__SP_CAPTURAS.postVideo) {
+        const cal = window.__SP_CAPTURAS.postVideo;
+        const { idVideo, sessoes } = await subirVideo(
+          cal.upload, await blobDeDataUrl(videoDataUrl),
+          cal.composer.variaveis, uidAtual());
+        const trocas = [
+          { de: cal.composer.sampleGroupId, para: idGrupo, embutido: true },
+          { de: cal.composer.sampleVideoId, para: idVideo, embutido: true },
+          ...sessoes.map((s) => ({ de: s.de, para: s.para, embutido: true })),
+        ].filter((t) => t.de && t.para);
+        const corpo = montarRequisicao(cal.composer, { trocas, texto });
+        const { status, texto: bruto } = await executarGraphql(corpo);
+        return classificarResposta(status, bruto);
+      }
       if (fotoDataUrl && window.__SP_CAPTURAS.postFoto) {
         const cal = window.__SP_CAPTURAS.postFoto;
         const idFoto = await subirFoto(cal.upload, fotoDataUrl);
@@ -776,6 +1366,8 @@
     }
   }
 
+  // extrai dados ricos por grupo — foto, privacidade, posts/dia,
+  // has_membership_questions, viewer_join_state (portado: ln deles)
   const extrairGrupos = (objs, mapa) => {
     let cursor;
     const visitar = (o, prof = 0) => {
@@ -786,12 +1378,32 @@
       if (tipo === "Group" || /group/i.test(String(tipo || ""))) {
         const id = o.id;
         const nome = o.name ?? o.title?.text;
-        if (id && /^\d{4,}$/.test(String(id)) && nome) {
+        if (id && /^\d{4,}$/.test(String(id)) && nome && !mapa.has(String(id))) {
+          const s = JSON.stringify(o);
+          const textoDe = (...chaves) => {
+            for (const c of chaves) {
+              const m = s.match(new RegExp(`"${c}"\\s*:\\s*\\{[^}]*?"text"\\s*:\\s*"([^"]+)"`));
+              if (m) return m[1];
+            }
+          };
           const membros =
+            textoDe("group_member_count", "member_count", "member_count_text")?.match(/[\d.,]+/)?.[0] ??
             o.group_member_count?.text?.match(/[\d.,]+/)?.[0] ??
             o.member_count?.text?.match(/[\d.,]+/)?.[0] ??
             o.visibility_sentence?.text?.match(/[\d.,]+/)?.[0];
-          mapa.set(String(id), { id: String(id), nome, membros });
+          const foto = s.match(/"profile_picture[^"]*"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]+)"/)?.[1];
+          const postsDia = s.match(/"text"\s*:\s*"([^"]*(?:posts?|publica[çc][õo]es)\s+por\s+dia[^"]*)"/i)?.[1];
+          const amigosComum = s.match(/"text"\s*:\s*"([^"]*(?:amigos?|friends?)\s+(?:em\s+comum|in\s+common)[^"]*)"/i)?.[1];
+          const privacidade = s.match(/"privacy"\s*:\s*"?(PUBLIC|PRIVATE|CLOSED|SECRET|Visibilidade[^",}]*)"?/i)?.[1] ??
+            s.match(/"group_visibility"\s*:\s*"([^"]+)"/i)?.[1];
+          const perguntas = /"has_membership_questions"\s*:\s*true/.test(s) ||
+            /"requires_questions"\s*:\s*true/.test(s);
+          const estado = s.match(/"viewer_join_state"\s*:\s*"([A-Z_]+)"/i)?.[1] ??
+            s.match(/"join_state"\s*:\s*"([A-Z_]+)"/i)?.[1];
+          mapa.set(String(id), {
+            id: String(id), nome, membros, foto, postsDia,
+            amigosComum, privacidade, perguntas, estado,
+          });
         }
       }
       for (const v of Object.values(o)) if (v && typeof v === "object") visitar(v, prof + 1);
@@ -812,8 +1424,9 @@
 
       const trocas = cal.sampleQuery ? [{ de: cal.sampleQuery, para: termo }] : [];
       const mapa = new Map();
-      let cursor;
-      for (let pagina = 0; pagina < 15; pagina++) {
+      let cursor, vazias = 0;
+      // até 90 páginas como eles; para em 2 páginas vazias seguidas
+      for (let pagina = 0; pagina < 90; pagina++) {
         const antes = mapa.size;
         const corpo = montarRequisicao(cal, {
           trocas,
@@ -825,7 +1438,8 @@
         const cls = classificarResposta(status, bruto);
         if (cls.resultado === "bloqueado") return { resultado: "bloqueado", erro: cls.erro };
         cursor = extrairGrupos(linhasJson(bruto), mapa);
-        if (mapa.size === antes || mapa.size >= limite || !cursor) break;
+        vazias = mapa.size === antes ? vazias + 1 : 0;
+        if (vazias >= 2 || mapa.size >= limite || !cursor) break;
       }
       return { resultado: "ok", grupos: [...mapa.values()].slice(0, limite) };
     } catch (e) {
@@ -987,6 +1601,124 @@
     }
   }
 
+  // ---------- listing do Marketplace ----------
+  const definirCampo = (node, chave, valor) => {
+    if (!node || typeof node !== "object") return;
+    const v = node[chave];
+    if (typeof v === "string" || typeof v === "number") node[chave] = valor;
+    else if (v && typeof v === "object" && "text" in v) v.text = valor;
+    else node[chave] = valor;
+  };
+
+  async function criarListing({ titulo, descricao, preco, moeda, fotosDataUrl = [], idsGrupos = [], paraMarketplace }) {
+    const cal = window.__SP_CAPTURAS.listing;
+    if (!cal) return { resultado: "erro", erro: "sem calibração de listing — publique um anúncio no Marketplace manualmente" };
+    const postando = window.__fbPostando;
+    window.__fbPostando = true;
+    try {
+      const vars = JSON.parse(JSON.stringify(cal.variaveis));
+      const item = acharProductItem(vars);
+      if (!item) return { resultado: "erro", erro: "molde sem product_item — recalibre" };
+
+      // fotos novas (se houver upload calibrado)
+      const idsNovos = [];
+      if (cal.upload && fotosDataUrl.length)
+        for (const d of fotosDataUrl) idsNovos.push(await subirFoto(cal.upload, d));
+
+      // substitui photo ids antigos pelos novos (embutido p/ attachments)
+      let varsStr = JSON.stringify(vars);
+      const antigos = cal.samplePhotoIds ?? [];
+      for (let i = 0; i < Math.min(antigos.length, idsNovos.length); i++)
+        varsStr = varsStr.split(antigos[i]).join(idsNovos[i]);
+      const vars2 = JSON.parse(varsStr);
+      const item2 = acharProductItem(vars2) ?? item;
+
+      if (titulo) definirCampo(item2, "title", titulo);
+      if (descricao) definirCampo(item2, "description", descricao);
+      if (preco && item2.item_price) {
+        definirCampo(item2.item_price, "price", String(preco));
+        if (moeda) definirCampo(item2.item_price, "currency", moeda);
+      }
+      const alvos = paraMarketplace
+        ? [ID_MARKETPLACE, ...idsGrupos]
+        : idsGrupos;
+      if (alvos.length && "xpost_target_ids" in item2)
+        item2.xpost_target_ids = alvos;
+
+      const trocas = [];
+      if (cal.sampleGroupId && alvos[0] && cal.sampleGroupId !== alvos[0])
+        trocas.push({ de: cal.sampleGroupId, para: alvos[0], embutido: true });
+      const corpo = montarRequisicao(cal, { trocas, variaveisBase: vars2 });
+      const { status, texto: bruto } = await executarGraphql(corpo);
+      return classificarResposta(status, bruto);
+    } catch (e) {
+      return { resultado: "erro", erro: e.message };
+    } finally {
+      window.__fbPostando = postando;
+    }
+  }
+
+  // ---------- lista de grupos via Graph API (portado: __accessToken → me/groups) ----------
+  const tokenDeHtml = (html) =>
+    html.match(/"apiAccessToken"\s*:\s*"([^"\\]+)"/)?.[1] ??
+    html.match(/\\"apiAccessToken\\"\s*:\s*\\"([^"\\]+)\\"/)?.[1] ??
+    html.match(/__accessToken["']?\s*[:=]\s*["']([^"']+)["']/)?.[1] ??
+    html.match(/\\"__accessToken\\"\s*:\s*\\"([^"\\]+)\\"/)?.[1] ??
+    "";
+
+  // cadeia de fontes do token (portado: Aa deles — headless ads/bm → aba)
+  async function tokenApiFb() {
+    const daPagina = tokenDeHtml(document.documentElement.innerHTML);
+    if (daPagina) return { token: daPagina, fonte: "pagina" };
+    for (const fonte of [
+      ["ads", "https://adsmanager.facebook.com/adsmanager/manage/campaigns"],
+      ["bm", "https://business.facebook.com/"],
+    ]) {
+      try {
+        const res = await fetch(fonte[1], { credentials: "include" });
+        if (/\/(login|checkpoint)\b/.test(res.url || "")) break;
+        const html = await res.text();
+        const t = tokenDeHtml(html) ||
+          html.match(/"accessToken"\s*:\s*"(EAA[^"\\]+)"/)?.[1] ||
+          html.match(/\\"accessToken\\"\s*:\s*\\"(EAA[^"\\]+)\\"/)?.[1] ||
+          "";
+        if (t) return { token: t, fonte: `headless-${fonte[0]}` };
+      } catch {}
+    }
+    return null;
+  }
+
+  async function meusGrupos() {
+    const tk = await tokenApiFb();
+    if (!tk)
+      return { resultado: "erro", erro: "access token do FB não encontrado — recarregue a página" };
+    const postando = window.__fbPostando;
+    window.__fbPostando = true;
+    try {
+      const url =
+        "https://graph.facebook.com/me/groups?fields=id,name,member_count,administrator" +
+        `&limit=200&access_token=${encodeURIComponent(tk.token)}`;
+      const res = await fetch(url);
+      const j = await res.json().catch(() => null);
+      if (!j?.data)
+        return { resultado: "erro", erro: j?.error?.message ?? `graph api falhou (http ${res.status})` };
+      return {
+        resultado: "ok",
+        fonte: tk.fonte,
+        grupos: j.data.map((g) => ({
+          id: String(g.id),
+          nome: g.name,
+          membros: g.member_count,
+          admin: !!g.administrator,
+        })),
+      };
+    } catch (e) {
+      return { resultado: "erro", erro: e.message };
+    } finally {
+      window.__fbPostando = postando;
+    }
+  }
+
   // ---------- ponte de mensagens ----------
   window.addEventListener("message", (ev) => {
     const d = ev.data;
@@ -1005,12 +1737,15 @@
         else if (acao === "membros") resultado = await membrosDoGrupo(dados);
         else if (acao === "amizade") resultado = await pedirAmizade(dados);
         else if (acao === "perfil") resultado = await resolverPerfil(dados.bruto);
+        else if (acao === "listing") resultado = await criarListing(dados);
+        else if (acao === "meusGrupos") resultado = await meusGrupos();
         else if (acao === "ping")
           resultado = {
             ok: true,
             calibracoes: Object.keys(window.__SP_CAPTURAS),
             docIds: window.__SP_DOCIDS ? window.__SP_DOCIDS.size : 0,
             sessao: !!(uidAtual() && dtsgDaPagina()),
+            video: { inicio: !!videoInicio, upload: !!videoUpload, fim: !!videoFim },
           };
         else resultado = { resultado: "erro", erro: "ação desconhecida" };
         emitir("resposta", { id, resultado });
@@ -1044,13 +1779,47 @@
       emitir("stats", { docIds: mapa.size, novos: mapa.size - antes });
   }
 
+  // ---------- SPA: minerar de novo ao trocar de rota (portado deles) ----------
+  const aoMudarRota = () => {
+    if (emRotaMembros()) {
+      minerarDocIds();
+      setTimeout(minerarDocIds, 2000);
+    }
+  };
+  window.addEventListener("popstate", aoMudarRota);
+  for (const met of ["pushState", "replaceState"]) {
+    const orig = history[met];
+    history[met] = function (...a) {
+      const r = orig.apply(this, a);
+      aoMudarRota();
+      return r;
+    };
+  }
+  try {
+    new PerformanceObserver((entries) => {
+      for (const e of entries.getEntries())
+        if (RE.bnzai.test(e.name) && emRotaMembros()) minerarDocIds();
+    }).observe({ type: "resource", buffered: true });
+  } catch {}
+
+  // watchdog de sessão (portado: sessionInvalidated deles) — se c_user ou
+  // dtsg sumirem durante automação, avisa o painel pra parar TODOS os jobs
+  let sessaoViva = true;
+  setInterval(() => {
+    const viva = !!(uidAtual() && dtsgDaPagina());
+    if (sessaoViva && !viva) emitir("sessaoInvalidada", { motivo: "cookie/dtsg sumiram" });
+    sessaoViva = viva;
+  }, 15000);
+
   if (document.readyState === "loading")
     document.addEventListener("DOMContentLoaded", () => {
       minerarDocIds();
+      setTimeout(aoMudarRota, 2500);
       setInterval(minerarDocIds, 60000);
     });
   else {
     minerarDocIds();
+    setTimeout(aoMudarRota, 2500);
     setInterval(minerarDocIds, 60000);
   }
 })();
